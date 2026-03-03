@@ -1,0 +1,3206 @@
+-- POLICE_SIM.pluto
+
+local SCRIPT_VERSION = "1.4.0"
+
+if not util then
+    error("This script must be run inside the Stand environment.")
+end
+
+util.require_natives(1681379138)
+util.keep_running()
+
+local PS_DIR = filesystem.scripts_dir() .. "store\\Police Simulator\\"
+local LANG_DIR = PS_DIR .. "Language\\"
+local SETTING_DIR = PS_DIR .. "Setting\\"
+local SETTING_FILE = SETTING_DIR .. "Setting.txt"
+local IMG_DIR = PS_DIR .. "Image\\"
+local LOG_FILE = PS_DIR .. "Log.txt"
+
+filesystem.mkdirs(LANG_DIR)
+filesystem.mkdirs(SETTING_DIR)
+filesystem.mkdirs(IMG_DIR)
+
+-- ==================== LOGGING SYSTEM ====================
+
+local function log_event(category, message)
+    local f = io.open(LOG_FILE, "a")
+    if f then
+        local timestamp = os.date("%Y-%m-%d %H:%M:%S")
+        f:write("[" .. timestamp .. "] [" .. category .. "] " .. message .. "\n")
+        f:close()
+    end
+end
+
+local function log_init()
+    log_event("SYSTEM", "Police Simulator v" .. SCRIPT_VERSION .. " started")
+end
+
+-- ==================== IMAGE / BANNER ====================
+
+local function show_banner(img_name, display_time)
+    local img_path = IMG_DIR .. img_name
+    if filesystem.exists(img_path) then
+        local alpha = 0.0
+        local alpha_speed = 0.01
+        local img = directx.create_texture(img_path)
+        local start_time = os.clock()
+
+        util.create_tick_handler(function()
+            alpha = alpha + alpha_speed
+            if alpha > 1.0 then
+                alpha = 1.0
+            elseif alpha < 0.0 then
+                alpha = 0.0
+                return false
+            end
+        end)
+
+        util.create_tick_handler(function()
+            directx.draw_texture(img, 0.10, 0.10, 0.5, 0.5, 0.5, 0.5, 0.0, 1.0, 1.0, 1.0, alpha)
+            local elapsed = os.clock() - start_time
+            if elapsed > display_time then
+                alpha_speed = -0.015
+            end
+            if alpha <= 0.0 then
+                return false
+            end
+        end)
+    else
+        -- Fallback: text-only banner
+        local alpha = 0.0
+        local alpha_speed = 0.01
+        local start_time = os.clock()
+
+        util.create_tick_handler(function()
+            alpha = alpha + alpha_speed
+            if alpha > 1.0 then
+                alpha = 1.0
+            elseif alpha < 0.0 then
+                alpha = 0.0
+                return false
+            end
+        end)
+
+        util.create_tick_handler(function()
+            -- Background
+            directx.draw_rect(0.5, 0.42, 0.25, 0.10, 0, 0, 0, alpha * 0.8)
+            -- Border
+            directx.draw_rect(0.5, 0.375, 0.25, 0.003, 0.2, 0.5, 1.0, alpha)
+            directx.draw_rect(0.5, 0.465, 0.25, 0.003, 0.2, 0.5, 1.0, alpha)
+            -- Title
+            directx.draw_text(0.5, 0.40, T("Police Simulator"), 5, 0.7, {r = 0.3, g = 0.6, b = 1.0, a = alpha}, true)
+            -- Version
+            directx.draw_text(0.5, 0.44, "v" .. SCRIPT_VERSION, 5, 0.4, {r = 1.0, g = 1.0, b = 1.0, a = alpha * 0.7}, true)
+
+            local elapsed = os.clock() - start_time
+            if elapsed > display_time then
+                alpha_speed = -0.015
+            end
+            if alpha <= 0.0 then
+                return false
+            end
+        end)
+    end
+end
+
+local function scan_lang_files()
+    local files = {}
+    for _, path in ipairs(filesystem.list_files(LANG_DIR)) do
+        if not filesystem.is_dir(path) and path:sub(-4):lower() == ".txt" then
+            local fname = path:match("([^\\]+)%.txt$") or path:match("([^/]+)%.txt$")
+            if fname then
+                local display = fname
+                local f = io.open(path, "r")
+                if f then
+                    local is_first = true
+                    for line in f:lines() do
+                        if is_first then
+                            line = line:gsub("^\xEF\xBB\xBF", "")
+                            is_first = false
+                        end
+                        line = line:match("^%s*(.-)%s*$") or line
+                        if line ~= "" and not line:match("^#") and line:match("=") then
+                            local k, v = line:match("^(.-)%s*=%s*(.+)$")
+                            if k then
+                                k = k:match("^%s*(.-)%s*$") or k
+                                v = v and (v:match("^%s*(.-)%s*$") or v)
+                            end
+                            if k == "LANGUAGE_NAME" and v then
+                                display = v
+                                break
+                            end
+                        end
+                    end
+                    f:close()
+                end
+                table.insert(files, {name = display, file = path})
+            end
+        end
+    end
+    return files
+end
+
+local LANG_FILES = scan_lang_files()
+
+local function read_setting(key)
+    if not filesystem.exists(SETTING_FILE) then return nil end
+    local f = io.open(SETTING_FILE, "r")
+    if not f then return nil end
+    for line in f:lines() do
+        local k, v = line:match("^(.-)%s*=%s*(.+)$")
+        if k == key then f:close() return v end
+    end
+    f:close()
+end
+
+local function write_setting(key, value)
+    local lines = {}
+    local found = false
+    if filesystem.exists(SETTING_FILE) then
+        local f = io.open(SETTING_FILE, "r")
+        if f then
+            for line in f:lines() do
+                local k = line:match("^(.-)%s*=")
+                if k and k:match("^%s*(.-)%s*$") == key then
+                    table.insert(lines, key .. " = " .. value)
+                    found = true
+                else
+                    table.insert(lines, line)
+                end
+            end
+            f:close()
+        end
+    end
+    if not found then table.insert(lines, key .. " = " .. value) end
+    local f = io.open(SETTING_FILE, "w")
+    if f then
+        for _, line in ipairs(lines) do f:write(line .. "\n") end
+        f:close()
+    end
+end
+
+local Translations = {}
+
+local function load_language(filepath)
+    Translations = {}
+    if not filesystem.exists(filepath) then return false end
+    local f = io.open(filepath, "r")
+    if not f then return false end
+    local first_line = true
+    for line in f:lines() do
+        -- UTF-8 BOM 제거
+        if first_line then
+            line = line:gsub("^\xEF\xBB\xBF", "")
+            first_line = false
+        end
+        -- 앞뒤 공백 제거
+        line = line:match("^%s*(.-)%s*$") or line
+        if line ~= "" and not line:match("^#") and line:match("=") then
+            local key, value = line:match("^(.-)%s*=%s*(.+)$")
+            if key and value then
+                key = key:match("^%s*(.-)%s*$") or key
+                value = value:match("^%s*(.-)%s*$") or value
+                Translations[key] = value
+            end
+        end
+    end
+    f:close()
+    return true
+end
+
+function T(key)
+    return Translations[key] or key
+end
+
+local function find_lang_file(name)
+    for _, lf in ipairs(LANG_FILES) do
+        if lf.name == name then return lf end
+    end
+end
+
+local function find_lang_by_prefix(prefix)
+    for _, lf in ipairs(LANG_FILES) do
+        local fname = lf.file:match("([^\\]+)%.txt$")
+        if fname and fname:lower():find(prefix:lower(), 1, true) then return lf end
+    end
+end
+
+-- Stand 언어 코드 → 언어 파일명 매핑
+local STAND_LANG_MAP = {
+    ["en"] = "English",
+    ["ko"] = "Korean",
+    ["zh"] = "Chinese",
+    ["ja"] = "Japanese",
+    ["jp"] = "Japanese",
+    ["fr"] = "French",
+    ["de"] = "German",
+    ["it"] = "Italian",
+    ["es"] = "Spanish",
+    ["pt"] = "Portuguese",
+    ["ru"] = "Russian",
+    ["pl"] = "Polish",
+    ["vi"] = "Vietnamese",
+}
+
+local current_lang = read_setting("Language")
+if not current_lang or current_lang == "Unknown" or not find_lang_file(current_lang) then
+    -- Stand 메뉴 언어 기반 자동 감지
+    local auto_detected = false
+    local stand_lang = nil
+
+    -- 방법 1: lang.get_current()
+    local ok1, result1 = pcall(function() return lang.get_current() end)
+    if ok1 and result1 then
+        stand_lang = result1
+    end
+
+    -- 방법 2: menu.get_edition/language (일부 Stand 버전 호환)
+    if not stand_lang then
+        local ok2, result2 = pcall(function() return menu.get_language and menu.get_language() end)
+        if ok2 and result2 then
+            stand_lang = result2
+        end
+    end
+
+    if stand_lang and STAND_LANG_MAP[stand_lang] then
+        local lf = find_lang_by_prefix(STAND_LANG_MAP[stand_lang])
+        if lf then
+            current_lang = lf.name
+            write_setting("Language", current_lang)
+            auto_detected = true
+        end
+    end
+    if not auto_detected then
+        -- OS 로케일 기반 감지 시도
+        local ok3, os_lang = pcall(function() return os.setlocale(nil) end)
+        if ok3 and os_lang then
+            local os_prefix = os_lang:sub(1, 2):lower()
+            if STAND_LANG_MAP[os_prefix] then
+                local lf = find_lang_by_prefix(STAND_LANG_MAP[os_prefix])
+                if lf then
+                    current_lang = lf.name
+                    write_setting("Language", current_lang)
+                    auto_detected = true
+                end
+            end
+        end
+    end
+    if not auto_detected then
+        local lf = find_lang_by_prefix("English")
+        if not lf and #LANG_FILES > 0 then lf = LANG_FILES[1] end
+        if lf then
+            current_lang = lf.name
+            write_setting("Language", current_lang)
+        end
+    end
+end
+
+local cur_lf = find_lang_file(current_lang)
+if cur_lf then
+    load_language(cur_lf.file)
+end
+
+local MenuRefs = {}
+local refresh_menus
+
+local function reg(ref, parent, name_fn, help_fn)
+    table.insert(MenuRefs, {ref = ref, parent = parent, name_fn = name_fn, help_fn = help_fn})
+    return ref
+end
+
+refresh_menus = function()
+    for _, item in ipairs(MenuRefs) do
+        if item.name_fn then pcall(menu.set_menu_name, item.ref, item.parent, item.name_fn()) end
+        if item.help_fn then pcall(menu.set_help_text, item.ref, item.help_fn()) end
+    end
+end
+
+local police_mode = false
+local original_player_ped = nil
+local original_ped_stash_pos = {x = 0.0, y = 0.0, z = -200.0}
+local patrol_vehicle = nil
+local patrol_partner = nil
+
+local criminals = {}
+local max_criminals = 5
+local crime_radius = 150.0
+local arrest_range = 3.0
+
+local chase_target = nil
+local chase_active = false
+
+local total_arrests = 0
+local total_kills = 0
+local total_crimes_detected = 0
+local shift_start_time = 0
+
+local wave_active = false
+local wave_number = 0
+
+local partner_enabled = true
+local siren_on = false
+local show_debug = true
+local auto_detect_crime = true
+local radio_enabled = true
+local player_invincible = false
+local clear_wanted = true
+local criminal_accuracy = 30
+local criminal_health_mult = 1.0
+local criminal_flee_chance = 30
+local criminal_vehicle_chance = 50
+local vehicle_invincible = true
+local partner_weapon_idx = 1
+local auto_heal = false
+local show_minimap_blips = true
+
+local godmode_ref = menu.ref_by_command_name("godmode")
+local original_godmode = menu.get_value(godmode_ref)
+
+-- Spike Strip
+local spike_strips = {}
+local max_spike_strips = 10
+local spike_radius = 3.5
+
+-- Backup Units
+local backup_units = {}
+local max_backup = 4
+
+-- Police Helicopter
+local police_heli = nil
+local heli_pilot = nil
+
+-- Rank System (forward declarations)
+local check_rank_up
+local add_rank_points
+local get_rank_name
+local get_next_rank_info
+
+local rank_points = 0
+local current_rank = 1
+local RANKS = {
+    {name = "Cadet", points = 0},
+    {name = "Officer", points = 10},
+    {name = "Corporal", points = 25},
+    {name = "Sergeant", points = 50},
+    {name = "Lieutenant", points = 100},
+    {name = "Captain", points = 200},
+    {name = "Commander", points = 350},
+    {name = "Deputy Chief", points = 500},
+    {name = "Chief of Police", points = 750},
+}
+
+-- Traffic Stop
+local traffic_stop_target = nil
+local traffic_stop_active = false
+
+-- Bounty Board
+local bounty_targets = {}
+local max_bounties = 3
+
+-- Roadblock
+local roadblock_objects = {}
+
+-- K9 Unit
+local k9_dog = nil
+local k9_blip = nil
+
+-- SWAT Team
+local swat_team = {}
+local max_swat = 6
+local swat_vehicle = nil
+
+-- Undercover Mode
+local undercover_mode = false
+
+-- Speed Trap
+local speed_trap_active = false
+local speed_trap_limit = 80.0
+local speed_trap_pos = nil
+local speed_trap_blip = nil
+local speed_trap_fines = 0
+
+-- Prisoner Transport
+local transport_active = false
+local transport_prisoners = 0
+local transport_vehicle = nil
+local transport_dest_blip = nil
+local transport_dest_pos = nil
+
+-- Difficulty
+local difficulty_level = 2
+local DIFFICULTY_PRESETS = {
+    {name = "Easy", accuracy = 15, health = 0.5, flee = 50, vehicle = 30},
+    {name = "Normal", accuracy = 30, health = 1.0, flee = 30, vehicle = 50},
+    {name = "Hard", accuracy = 50, health = 2.0, flee = 15, vehicle = 60},
+    {name = "Extreme", accuracy = 80, health = 3.0, flee = 5, vehicle = 80},
+}
+
+local POLICE_MODELS = {
+    { name = "Patrol Officer (M)",  hash = "s_m_y_cop_01" },
+    { name = "Highway Patrol (M)",  hash = "s_m_y_hwaycop_01" },
+    { name = "Patrol Officer (F)",  hash = "s_f_y_cop_01" },
+    { name = "Sheriff (M)",         hash = "s_m_y_sheriff_01" },
+    { name = "Sheriff (F)",         hash = "s_f_y_sheriff_01" },
+    { name = "SWAT",                hash = "s_m_y_swat_01" },
+    { name = "FIB Agent",           hash = "s_m_m_fibsec_01" },
+}
+local selected_model_idx = 1
+
+local PATROL_VEHICLES = {
+    { name = "Police Car",      hash = "police" },
+    { name = "Police Car 2",    hash = "police2" },
+    { name = "Police Car 3",    hash = "police3" },
+    { name = "Police Muscle",   hash = "police4" },
+    { name = "Unmarked Police", hash = "police3" },
+    { name = "Sheriff Car",     hash = "sheriff" },
+    { name = "Sheriff Car 2",   hash = "sheriff2" },
+    { name = "FBI Car",         hash = "fbi" },
+    { name = "FBI SUV",         hash = "fbi2" },
+    { name = "Police Bike",     hash = "policeb" },
+    { name = "Police Van",      hash = "policet" },
+}
+local selected_vehicle_idx = 1
+
+local CRIMINAL_WEAPONS = {
+    "weapon_pistol", "weapon_microsmg", "weapon_pumpshotgun", "weapon_smg",
+    "weapon_assaultrifle", "weapon_knife", "weapon_bat", "weapon_switchblade",
+}
+
+local CRIMINAL_MODELS = {
+    "g_m_y_ballaorig_01", "g_m_y_lost_01", "g_m_y_lost_02", "g_m_y_famfor_01",
+    "g_m_y_mexgoon_01", "g_m_y_mexgoon_02", "g_m_y_strpunk_01", "g_m_y_strpunk_02",
+    "g_m_y_salvagoon_01", "g_m_y_korean_01", "a_m_y_stbla_01", "a_m_y_stbla_02",
+    "a_m_m_trampbeac_01",
+}
+
+local PARTNER_WEAPONS = {
+    { name = "Pistol",          hash = "weapon_pistol" },
+    { name = "SMG",             hash = "weapon_smg" },
+    { name = "Shotgun",         hash = "weapon_pumpshotgun" },
+    { name = "Assault Rifle",   hash = "weapon_assaultrifle" },
+    { name = "Carbine Rifle",   hash = "weapon_carbinerifle" },
+    { name = "Combat MG",       hash = "weapon_combatmg" },
+}
+
+local CRIME_MESSAGES = {
+    "Armed robbery in progress!", "Vehicle theft reported!", "Assault in progress!",
+    "Shots fired report!", "Drug deal spotted!", "Vandalism reported!",
+    "Fleeing vehicle spotted!", "Armed suspect spotted!", "Break-in reported!",
+    "Bank robbery attempt!",
+}
+
+local function radio_message(msg)
+    log_event("RADIO", msg)
+    if not radio_enabled then return end
+    util.toast("[" .. T("Radio") .. "] " .. msg)
+    AUDIO.PLAY_SOUND_FRONTEND(-1, "CONFIRM_BEEP", "HUD_MINI_GAME_SOUNDSET", true)
+end
+
+local function get_random_pos_around(center, min_dist, max_dist)
+    local angle = math.random() * math.pi * 2
+    local dist = min_dist + math.random() * (max_dist - min_dist)
+    local x = center.x + math.cos(angle) * dist
+    local y = center.y + math.sin(angle) * dist
+
+    local found = memory.alloc(4)
+    local z = center.z
+    for test_z = 1000.0, 0.0, -50.0 do
+        if MISC.GET_GROUND_Z_FOR_3D_COORD(x, y, test_z, found, false, false) then
+            z = memory.read_float(found) + 1.0
+            break
+        end
+    end
+    memory.free(found)
+
+    return v3(x, y, z)
+end
+
+local function safe_delete(handle)
+    if handle and handle ~= 0 and ENTITY.DOES_ENTITY_EXIST(handle) then
+        ENTITY.SET_ENTITY_AS_MISSION_ENTITY(handle, true, true)
+        entities.delete_by_handle(handle)
+    end
+end
+
+local function remove_blip(blip)
+    if blip and HUD.DOES_BLIP_EXIST(blip) then
+        HUD.REMOVE_BLIP(blip)
+    end
+end
+
+local function give_police_weapons(ped)
+    WEAPON.GIVE_WEAPON_TO_PED(ped, util.joaat("weapon_pistol"), 200, false, true)
+    WEAPON.GIVE_WEAPON_TO_PED(ped, util.joaat("weapon_pumpshotgun"), 50, false, false)
+    WEAPON.GIVE_WEAPON_TO_PED(ped, util.joaat("weapon_smg"), 200, false, false)
+    WEAPON.GIVE_WEAPON_TO_PED(ped, util.joaat("weapon_stungun"), 100, false, false)
+    WEAPON.GIVE_WEAPON_TO_PED(ped, util.joaat("weapon_nightstick"), 1, false, false)
+    WEAPON.GIVE_WEAPON_TO_PED(ped, util.joaat("weapon_flashlight"), 1, false, false)
+    PED.SET_PED_ARMOUR(ped, 100)
+end
+
+local function start_police_mode()
+    if police_mode then
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("Already on duty."))
+        return
+    end
+
+    local model_info = POLICE_MODELS[selected_model_idx]
+    local model_hash = util.joaat(model_info.hash)
+    util.request_model(model_hash)
+
+    original_player_ped = players.user_ped()
+    local current_pos = players.get_position(players.user())
+
+    local police_ped = PED.CREATE_PED(4, model_hash, current_pos.x, current_pos.y, current_pos.z, ENTITY.GET_ENTITY_HEADING(original_player_ped), true, false)
+    if police_ped == 0 then
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("Police ped creation failed!"))
+        original_player_ped = nil
+        STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(model_hash)
+        return
+    end
+
+    ENTITY.SET_ENTITY_AS_MISSION_ENTITY(police_ped, true, true)
+    PED.SET_PED_DEFAULT_COMPONENT_VARIATION(police_ped)
+    PED.SET_PED_CONFIG_FLAG(police_ped, 35, false)
+    ENTITY.SET_ENTITY_AS_MISSION_ENTITY(original_player_ped, true, true)
+
+    PLAYER.CHANGE_PLAYER_PED(players.user(), police_ped, false, false)
+    util.yield(1000)
+
+    -- Preserve custom appearance by stashing original ped underground
+    if ENTITY.DOES_ENTITY_EXIST(original_player_ped) then
+        ENTITY.SET_ENTITY_COORDS_NO_OFFSET(original_player_ped, original_ped_stash_pos.x, original_ped_stash_pos.y, original_ped_stash_pos.z, false, false, false)
+        ENTITY.FREEZE_ENTITY_POSITION(original_player_ped, true)
+        ENTITY.SET_ENTITY_COLLISION(original_player_ped, false, false)
+        ENTITY.SET_ENTITY_VISIBLE(original_player_ped, false, false)
+        ENTITY.SET_ENTITY_INVINCIBLE(original_player_ped, true)
+        ENTITY.SET_ENTITY_ALPHA(original_player_ped, 0, false)
+        ENTITY.SET_ENTITY_CAN_BE_DAMAGED(original_player_ped, false)
+    end
+
+    STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(model_hash)
+    give_police_weapons(players.user_ped())
+
+    if player_invincible then
+        menu.set_value(godmode_ref, true)
+    end
+
+    police_mode = true
+    shift_start_time = os.time()
+
+    log_event("DUTY", "Started duty | Uniform: " .. model_info.name)
+    radio_message(T("HQ, on duty. Starting patrol."))
+    util.toast("[" .. T("Police Simulator") .. "] " .. T("Police mode activated!") .. "\n" .. T("Uniform") .. ": " .. T(model_info.name))
+end
+
+local function stop_police_mode()
+    if not police_mode then return end
+    local elapsed = os.time() - shift_start_time
+    log_event("DUTY", "Ended duty | Time: " .. math.floor(elapsed / 60) .. "min | Arrests: " .. total_arrests .. " | Kills: " .. total_kills .. " | Crimes: " .. total_crimes_detected)
+
+    for _, c in ipairs(criminals) do
+        safe_delete(c.ped)
+        safe_delete(c.vehicle)
+        remove_blip(c.blip)
+    end
+    criminals = {}
+
+    -- Clean up tactical features
+    for _, s in ipairs(spike_strips) do
+        safe_delete(s.obj)
+        remove_blip(s.blip)
+    end
+    spike_strips = {}
+
+    for _, b in ipairs(backup_units) do
+        safe_delete(b.ped)
+        remove_blip(b.blip)
+    end
+    backup_units = {}
+
+    for _, b in ipairs(bounty_targets) do
+        safe_delete(b.ped)
+        remove_blip(b.blip)
+    end
+    bounty_targets = {}
+
+    for _, obj in ipairs(roadblock_objects) do
+        safe_delete(obj)
+    end
+    roadblock_objects = {}
+
+    safe_delete(heli_pilot)
+    safe_delete(police_heli)
+    heli_pilot = nil
+    police_heli = nil
+
+    safe_delete(k9_dog)
+    remove_blip(k9_blip)
+    k9_dog = nil
+    k9_blip = nil
+
+    for _, s in ipairs(swat_team) do
+        safe_delete(s.ped)
+        remove_blip(s.blip)
+    end
+    swat_team = {}
+    safe_delete(swat_vehicle)
+    swat_vehicle = nil
+
+    undercover_mode = false
+
+    speed_trap_active = false
+    remove_blip(speed_trap_blip)
+    speed_trap_blip = nil
+    speed_trap_pos = nil
+    speed_trap_fines = 0
+
+    safe_delete(transport_vehicle)
+    transport_vehicle = nil
+    remove_blip(transport_dest_blip)
+    transport_dest_blip = nil
+    transport_dest_pos = nil
+    transport_active = false
+    transport_prisoners = 0
+
+    if traffic_stop_target and ENTITY.DOES_ENTITY_EXIST(traffic_stop_target) then
+        VEHICLE.SET_VEHICLE_INDICATOR_LIGHTS(traffic_stop_target, 0, false)
+        VEHICLE.SET_VEHICLE_INDICATOR_LIGHTS(traffic_stop_target, 1, false)
+    end
+    traffic_stop_target = nil
+    traffic_stop_active = false
+
+    safe_delete(patrol_partner)
+    patrol_partner = nil
+
+    chase_active = false
+    chase_target = nil
+
+    local police_ped = players.user_ped()
+    local current_pos = players.get_position(players.user())
+    local heading = ENTITY.GET_ENTITY_HEADING(police_ped)
+
+    if original_player_ped and ENTITY.DOES_ENTITY_EXIST(original_player_ped) then
+        ENTITY.SET_ENTITY_COORDS_NO_OFFSET(original_player_ped, current_pos.x, current_pos.y, current_pos.z, false, false, false)
+        ENTITY.SET_ENTITY_HEADING(original_player_ped, heading)
+        ENTITY.SET_ENTITY_VISIBLE(original_player_ped, true, false)
+        ENTITY.SET_ENTITY_COLLISION(original_player_ped, true, true)
+        ENTITY.FREEZE_ENTITY_POSITION(original_player_ped, false)
+        ENTITY.SET_ENTITY_INVINCIBLE(original_player_ped, false)
+        ENTITY.SET_ENTITY_CAN_BE_DAMAGED(original_player_ped, true)
+        ENTITY.SET_ENTITY_ALPHA(original_player_ped, 255, false)
+        ENTITY.SET_ENTITY_HEALTH(original_player_ped, ENTITY.GET_ENTITY_MAX_HEALTH(original_player_ped), 0)
+
+        PLAYER.CHANGE_PLAYER_PED(players.user(), original_player_ped, false, false)
+        util.yield(1000)
+
+        if police_ped ~= players.user_ped() and ENTITY.DOES_ENTITY_EXIST(police_ped) then
+            safe_delete(police_ped)
+        end
+    else
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("Character restoration failed!") .. "\n" .. T("Reconnect session or use appearance change."))
+    end
+
+    PLAYER.SET_PLAYER_CONTROL(players.user(), true, 0)
+    local cur_ped = players.user_ped()
+    ENTITY.FREEZE_ENTITY_POSITION(cur_ped, false)
+    PED.SET_PED_CAN_RAGDOLL(cur_ped, true)
+    ENTITY.SET_ENTITY_VISIBLE(cur_ped, true, false)
+    ENTITY.SET_ENTITY_COLLISION(cur_ped, true, true)
+    ENTITY.SET_ENTITY_ALPHA(cur_ped, 255, false)
+
+    original_player_ped = nil
+    menu.set_value(godmode_ref, original_godmode)
+
+    local elapsed = os.time() - shift_start_time
+    local minutes = math.floor(elapsed / 60)
+
+    police_mode = false
+
+    radio_message(T("HQ, ending duty. Good work."))
+    util.toast("[" .. T("Police Simulator") .. "] " .. T("Duty ended!") .. "\n" ..
+               T("Duty time") .. ": " .. minutes .. T("min") .. "\n" ..
+               T("Arrests") .. ": " .. total_arrests .. T("cases") .. "\n" ..
+               T("Kills") .. ": " .. total_kills .. T("cases"))
+end
+
+local function spawn_partner()
+    if not patrol_vehicle or not ENTITY.DOES_ENTITY_EXIST(patrol_vehicle) then return end
+
+    safe_delete(patrol_partner)
+
+    local partner_hash = util.joaat("s_m_y_cop_01")
+    util.request_model(partner_hash)
+
+    patrol_partner = PED.CREATE_PED_INSIDE_VEHICLE(patrol_vehicle, 4, partner_hash, 0, true, false)
+    if patrol_partner == 0 then
+        patrol_partner = nil
+        return
+    end
+
+    ENTITY.SET_ENTITY_AS_MISSION_ENTITY(patrol_partner, true, true)
+    ENTITY.SET_ENTITY_INVINCIBLE(patrol_partner, true)
+    PED.SET_PED_FLEE_ATTRIBUTES(patrol_partner, 0, false)
+    PED.SET_PED_COMBAT_ATTRIBUTES(patrol_partner, 46, true)
+    PED.SET_PED_COMBAT_ATTRIBUTES(patrol_partner, 5, true)
+    PED.SET_BLOCKING_OF_NON_TEMPORARY_EVENTS(patrol_partner, true)
+    PED.SET_PED_CAN_BE_DRAGGED_OUT(patrol_partner, false)
+
+    local pw = PARTNER_WEAPONS[partner_weapon_idx] or PARTNER_WEAPONS[1]
+    WEAPON.GIVE_WEAPON_TO_PED(patrol_partner, util.joaat(pw.hash), 200, false, true)
+    WEAPON.GIVE_WEAPON_TO_PED(patrol_partner, util.joaat("weapon_pumpshotgun"), 50, false, false)
+
+    STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(partner_hash)
+end
+
+local function spawn_patrol_vehicle()
+    local veh_info = PATROL_VEHICLES[selected_vehicle_idx]
+    local veh_hash = util.joaat(veh_info.hash)
+    util.request_model(veh_hash)
+
+    local pos = players.get_position(players.user())
+    local heading = ENTITY.GET_ENTITY_HEADING(players.user_ped())
+
+    safe_delete(patrol_vehicle)
+
+    local spawn_x = pos.x + math.cos(math.rad(heading)) * 5.0
+    local spawn_y = pos.y + math.sin(math.rad(heading)) * 5.0
+
+    patrol_vehicle = VEHICLE.CREATE_VEHICLE(veh_hash, spawn_x, spawn_y, pos.z + 0.5, heading, true, false, false)
+    if patrol_vehicle == 0 then
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("Vehicle spawn failed!"))
+        patrol_vehicle = nil
+        return
+    end
+
+    ENTITY.SET_ENTITY_AS_MISSION_ENTITY(patrol_vehicle, true, true)
+    VEHICLE.SET_VEHICLE_ON_GROUND_PROPERLY(patrol_vehicle, 5.0)
+    VEHICLE.SET_VEHICLE_ENGINE_ON(patrol_vehicle, true, true, true)
+    ENTITY.SET_ENTITY_INVINCIBLE(patrol_vehicle, vehicle_invincible)
+    VEHICLE.SET_VEHICLE_SIREN(patrol_vehicle, siren_on)
+    VEHICLE.SET_VEHICLE_HAS_MUTED_SIRENS(patrol_vehicle, false)
+
+    STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(veh_hash)
+
+    if partner_enabled then
+        spawn_partner()
+    end
+
+    log_event("VEHICLE", "Spawned patrol vehicle: " .. veh_info.name)
+    util.toast("[" .. T("Police Simulator") .. "] " .. T("Patrol vehicle spawned") .. ": " .. T(veh_info.name))
+end
+
+local function spawn_criminal(pos, armed, has_vehicle)
+    if #criminals >= max_criminals then return nil end
+
+    local model_hash = util.joaat(CRIMINAL_MODELS[math.random(1, #CRIMINAL_MODELS)])
+    util.request_model(model_hash)
+
+    local criminal_ped = PED.CREATE_PED(4, model_hash, pos.x, pos.y, pos.z, math.random(0, 360) * 1.0, true, false)
+    if criminal_ped == 0 then
+        STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(model_hash)
+        return nil
+    end
+
+    ENTITY.SET_ENTITY_AS_MISSION_ENTITY(criminal_ped, true, true)
+
+    local base_health = ENTITY.GET_ENTITY_MAX_HEALTH(criminal_ped)
+    ENTITY.SET_ENTITY_MAX_HEALTH(criminal_ped, math.floor(base_health * criminal_health_mult))
+    ENTITY.SET_ENTITY_HEALTH(criminal_ped, math.floor(base_health * criminal_health_mult), 0)
+
+    if armed then
+        WEAPON.GIVE_WEAPON_TO_PED(criminal_ped, util.joaat(CRIMINAL_WEAPONS[math.random(1, #CRIMINAL_WEAPONS)]), 200, false, true)
+    end
+
+    PED.SET_PED_FLEE_ATTRIBUTES(criminal_ped, 0, false)
+    PED.SET_PED_COMBAT_ATTRIBUTES(criminal_ped, 46, true)
+    PED.SET_PED_COMBAT_ATTRIBUTES(criminal_ped, 5, true)
+    PED.SET_BLOCKING_OF_NON_TEMPORARY_EVENTS(criminal_ped, true)
+    PED.SET_PED_ACCURACY(criminal_ped, criminal_accuracy)
+
+    PED.SET_PED_AS_ENEMY(criminal_ped, true)
+    TASK.TASK_COMBAT_PED(criminal_ped, players.user_ped(), 0, 16)
+
+    local blip = HUD.ADD_BLIP_FOR_ENTITY(criminal_ped)
+    HUD.SET_BLIP_COLOUR(blip, 1)
+    HUD.SET_BLIP_SCALE(blip, 0.8)
+    HUD.SET_BLIP_AS_SHORT_RANGE(blip, false)
+
+    local criminal_data = {
+        ped = criminal_ped,
+        blip = blip,
+        armed = armed,
+        alive = true,
+        arrested = false,
+        fleeing = false,
+        vehicle = nil,
+        spawn_time = os.time(),
+    }
+
+    if has_vehicle then
+        local veh_models = {"sultan", "buffalo", "dominator", "gauntlet", "fugitive", "oracle2", "tailgater", "felon"}
+        local veh_hash = util.joaat(veh_models[math.random(1, #veh_models)])
+        util.request_model(veh_hash)
+        local veh = VEHICLE.CREATE_VEHICLE(veh_hash, pos.x + 3.0, pos.y + 3.0, pos.z, 0.0, true, false, false)
+        if veh ~= 0 then
+            ENTITY.SET_ENTITY_AS_MISSION_ENTITY(veh, true, true)
+            VEHICLE.SET_VEHICLE_ON_GROUND_PROPERLY(veh, 5.0)
+            PED.SET_PED_INTO_VEHICLE(criminal_ped, veh, -1)
+            criminal_data.vehicle = veh
+            TASK.TASK_VEHICLE_DRIVE_WANDER(criminal_ped, veh, 80.0, 524852)
+        end
+        STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(veh_hash)
+    end
+
+    table.insert(criminals, criminal_data)
+    total_crimes_detected = total_crimes_detected + 1
+    STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(model_hash)
+
+    return criminal_data
+end
+
+local function arrest_criminal(criminal_data)
+    if not criminal_data or criminal_data.arrested then return end
+    if not ENTITY.DOES_ENTITY_EXIST(criminal_data.ped) then return end
+    if ENTITY.IS_ENTITY_DEAD(criminal_data.ped) then return end
+
+    local player_pos = players.get_position(players.user())
+    local crim_pos = ENTITY.GET_ENTITY_COORDS(criminal_data.ped, true)
+    local dist = player_pos:distance(crim_pos)
+
+    if dist > arrest_range then
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("Get closer to the criminal!") .. " (" .. string.format("%.1f", dist) .. "m)")
+        return
+    end
+
+    NETWORK.NETWORK_REQUEST_CONTROL_OF_ENTITY(criminal_data.ped)
+    util.yield(200)
+
+    TASK.CLEAR_PED_TASKS_IMMEDIATELY(criminal_data.ped)
+    WEAPON.REMOVE_ALL_PED_WEAPONS(criminal_data.ped, true)
+
+    TASK.TASK_PLAY_ANIM(criminal_data.ped, "random@arrests@busted", "idle_a",
+        8.0, -8.0, -1, 1, 0, false, false, false)
+
+    util.yield(500)
+    ENTITY.FREEZE_ENTITY_POSITION(criminal_data.ped, true)
+    PED.SET_BLOCKING_OF_NON_TEMPORARY_EVENTS(criminal_data.ped, true)
+
+    criminal_data.arrested = true
+    criminal_data.alive = true
+    total_arrests = total_arrests + 1
+    add_rank_points(3)
+
+    if criminal_data.blip and HUD.DOES_BLIP_EXIST(criminal_data.blip) then
+        HUD.SET_BLIP_COLOUR(criminal_data.blip, 2)
+    end
+
+    log_event("ARREST", "Suspect arrested | Total: " .. total_arrests)
+    radio_message(T("HQ, 1 suspect arrested. Total arrests") .. ": " .. total_arrests .. T("cases"))
+    AUDIO.PLAY_SOUND_FRONTEND(-1, "MEDAL_UP", "HUD_MINI_GAME_SOUNDSET", true)
+
+    util.yield(3000)
+    if ENTITY.DOES_ENTITY_EXIST(criminal_data.ped) then
+        for alpha = 240, 0, -30 do
+            if not ENTITY.DOES_ENTITY_EXIST(criminal_data.ped) then break end
+            ENTITY.SET_ENTITY_ALPHA(criminal_data.ped, alpha, false)
+            util.yield(80)
+        end
+        safe_delete(criminal_data.ped)
+    end
+    safe_delete(criminal_data.vehicle)
+    remove_blip(criminal_data.blip)
+end
+
+local function get_closest_criminal()
+    local player_pos = players.get_position(players.user())
+    local closest = nil
+    local closest_dist = 999999.0
+
+    for _, c in ipairs(criminals) do
+        if ENTITY.DOES_ENTITY_EXIST(c.ped) and not c.arrested and not ENTITY.IS_ENTITY_DEAD(c.ped) then
+            local dist = player_pos:distance(ENTITY.GET_ENTITY_COORDS(c.ped, true))
+            if dist < closest_dist then
+                closest_dist = dist
+                closest = c
+            end
+        end
+    end
+
+    return closest, closest_dist
+end
+
+local function generate_crime_event()
+    if not police_mode or #criminals >= max_criminals then return end
+
+    local player_pos = players.get_position(players.user())
+    local crime_pos = get_random_pos_around(player_pos, 60.0, crime_radius)
+
+    local armed = math.random() > 0.3
+    local has_vehicle = math.random(1, 100) <= criminal_vehicle_chance
+
+    local criminal = spawn_criminal(crime_pos, armed, has_vehicle)
+    if criminal then
+        log_event("CRIME", CRIME_MESSAGES[math.random(1, #CRIME_MESSAGES)] .. " | Distance: " .. string.format("%.0f", player_pos:distance(crime_pos)) .. "m")
+        radio_message(T(CRIME_MESSAGES[math.random(1, #CRIME_MESSAGES)]) .. "\n" .. T("Distance to location") .. ": " ..
+                      string.format("%.0f", player_pos:distance(crime_pos)) .. "m")
+
+        if criminal.blip and HUD.DOES_BLIP_EXIST(criminal.blip) then
+            HUD.SET_BLIP_FLASHES(criminal.blip, true)
+            HUD.SET_BLIP_FLASH_TIMER(criminal.blip, 5000)
+        end
+    end
+end
+
+local function start_chase(criminal_data)
+    if not criminal_data or not ENTITY.DOES_ENTITY_EXIST(criminal_data.ped) then return end
+
+    chase_target = criminal_data
+    chase_active = true
+
+    NETWORK.NETWORK_REQUEST_CONTROL_OF_ENTITY(criminal_data.ped)
+    util.yield(100)
+
+    if criminal_data.vehicle and ENTITY.DOES_ENTITY_EXIST(criminal_data.vehicle) then
+        TASK.CLEAR_PED_TASKS_IMMEDIATELY(criminal_data.ped)
+        TASK.TASK_VEHICLE_DRIVE_WANDER(criminal_data.ped, criminal_data.vehicle, 100.0, 524852)
+        criminal_data.fleeing = true
+        radio_message(T("HQ, suspect fleeing in vehicle! Pursuit started!"))
+    else
+        TASK.CLEAR_PED_TASKS_IMMEDIATELY(criminal_data.ped)
+        TASK.TASK_SMART_FLEE_PED(criminal_data.ped, players.user_ped(), 200.0, -1, false, false)
+        criminal_data.fleeing = true
+        radio_message(T("HQ, suspect fleeing on foot! Pursuit started!"))
+    end
+
+    if patrol_vehicle and ENTITY.DOES_ENTITY_EXIST(patrol_vehicle) then
+        VEHICLE.SET_VEHICLE_SIREN(patrol_vehicle, true)
+        siren_on = true
+    end
+end
+
+local function stop_chase()
+    chase_active = false
+    chase_target = nil
+    radio_message(T("Chase ended."))
+end
+
+util.create_tick_handler(function()
+    if police_mode and original_player_ped and ENTITY.DOES_ENTITY_EXIST(original_player_ped) then
+        ENTITY.SET_ENTITY_AS_MISSION_ENTITY(original_player_ped, true, true)
+        ENTITY.FREEZE_ENTITY_POSITION(original_player_ped, true)
+        ENTITY.SET_ENTITY_INVINCIBLE(original_player_ped, true)
+        ENTITY.SET_ENTITY_CAN_BE_DAMAGED(original_player_ped, false)
+    end
+
+    if police_mode and clear_wanted then
+        PLAYER.SET_PLAYER_WANTED_LEVEL(players.user(), 0, false)
+        PLAYER.SET_PLAYER_WANTED_LEVEL_NOW(players.user(), false)
+    end
+
+    if police_mode and auto_heal then
+        local ped = players.user_ped()
+        local hp = ENTITY.GET_ENTITY_HEALTH(ped)
+        local max_hp = ENTITY.GET_ENTITY_MAX_HEALTH(ped)
+        if hp < max_hp and hp > 0 then
+            ENTITY.SET_ENTITY_HEALTH(ped, math.min(hp + 1, max_hp), 0)
+        end
+    end
+end)
+
+util.create_tick_handler(function()
+    if not police_mode then return end
+
+    for i = #criminals, 1, -1 do
+        local c = criminals[i]
+        if ENTITY.DOES_ENTITY_EXIST(c.ped) then
+            if ENTITY.IS_ENTITY_DEAD(c.ped) and c.alive and not c.arrested then
+                c.alive = false
+                total_kills = total_kills + 1
+                add_rank_points(1)
+
+                remove_blip(c.blip)
+                log_event("KILL", "Suspect killed | Total: " .. total_kills)
+                radio_message(T("Suspect killed. Total kills") .. ": " .. total_kills .. T("cases"))
+
+                if chase_target == c then
+                    stop_chase()
+                end
+
+                local ped_ref = c.ped
+                local veh_ref = c.vehicle
+                table.remove(criminals, i)
+
+                util.create_thread(function()
+                    util.yield(3000)
+                    safe_delete(ped_ref)
+                    safe_delete(veh_ref)
+                end)
+            end
+        else
+            remove_blip(c.blip)
+            table.remove(criminals, i)
+        end
+    end
+
+    for i = #criminals, 1, -1 do
+        local c = criminals[i]
+        if c.arrested and not ENTITY.DOES_ENTITY_EXIST(c.ped) then
+            remove_blip(c.blip)
+            table.remove(criminals, i)
+        end
+    end
+end)
+
+local last_crime_time = 0
+local crime_interval = 30
+
+util.create_tick_handler(function()
+    if not police_mode or not auto_detect_crime then return end
+
+    local now = os.time()
+    if now - last_crime_time >= crime_interval then
+        if #criminals < max_criminals and math.random() > 0.4 then
+            generate_crime_event()
+        end
+        last_crime_time = now
+    end
+end)
+
+util.create_tick_handler(function()
+    if not police_mode or not patrol_partner then return end
+    if not ENTITY.DOES_ENTITY_EXIST(patrol_partner) then
+        patrol_partner = nil
+        return
+    end
+
+    if patrol_vehicle and ENTITY.DOES_ENTITY_EXIST(patrol_vehicle) then
+        if PED.IS_PED_IN_VEHICLE(players.user_ped(), patrol_vehicle, false) then
+            if not PED.IS_PED_IN_VEHICLE(patrol_partner, patrol_vehicle, false) then
+                PED.SET_PED_INTO_VEHICLE(patrol_partner, patrol_vehicle, 0)
+            end
+        end
+    end
+
+    if chase_active and chase_target and ENTITY.DOES_ENTITY_EXIST(chase_target.ped) and not ENTITY.IS_ENTITY_DEAD(chase_target.ped) then
+        if PED.GET_SCRIPT_TASK_STATUS(patrol_partner, 0x2E85A751) == 7 then
+            TASK.TASK_COMBAT_PED(patrol_partner, chase_target.ped, 0, 16)
+        end
+    end
+end)
+
+local function start_wave_mode()
+    if wave_active then
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("Wave already in progress."))
+        return
+    end
+
+    wave_active = true
+    wave_number = 0
+
+    radio_message(T("HQ, large-scale criminal activity! Wave mode!"))
+
+    util.create_thread(function()
+        while wave_active and police_mode do
+            wave_number = wave_number + 1
+            local num_criminals = math.min(wave_number + 1, max_criminals)
+
+            radio_message(T("Wave") .. " " .. wave_number .. " " .. T("started! Criminals") .. " " .. num_criminals .. T("appeared!"))
+
+            local player_pos = players.get_position(players.user())
+            for i = 1, num_criminals do
+                if #criminals < max_criminals then
+                    spawn_criminal(get_random_pos_around(player_pos, 30.0, 80.0), wave_number >= 2 or math.random() > 0.5, false)
+                    util.yield(500)
+                end
+            end
+
+            while wave_active and police_mode do
+                local remaining = 0
+                for _, c in ipairs(criminals) do
+                    if c.alive and not c.arrested and ENTITY.DOES_ENTITY_EXIST(c.ped) and not ENTITY.IS_ENTITY_DEAD(c.ped) then
+                        remaining = remaining + 1
+                    end
+                end
+                if remaining == 0 then break end
+                util.yield(1000)
+            end
+
+            if not wave_active or not police_mode then break end
+
+            add_rank_points(wave_number * 2)
+            radio_message(T("Wave") .. " " .. wave_number .. " " .. T("Wave cleared! Preparing next wave..."))
+            AUDIO.PLAY_SOUND_FRONTEND(-1, "MEDAL_UP", "HUD_MINI_GAME_SOUNDSET", true)
+            util.yield(5000)
+        end
+
+        wave_active = false
+        radio_message(T("Wave mode ended. Total waves") .. ": " .. wave_number)
+    end)
+end
+
+local function stop_wave_mode()
+    wave_active = false
+    radio_message(T("Wave mode stopped."))
+end
+
+-- ==================== RANK SYSTEM ====================
+
+check_rank_up = function()
+    for i = #RANKS, 1, -1 do
+        if rank_points >= RANKS[i].points then
+            if i > current_rank then
+                current_rank = i
+                log_event("RANK", "Promoted to " .. RANKS[i].name .. " | Points: " .. rank_points)
+                radio_message(T("Promoted!") .. " " .. T("Rank") .. ": " .. T(RANKS[i].name))
+                AUDIO.PLAY_SOUND_FRONTEND(-1, "MEDAL_UP", "HUD_MINI_GAME_SOUNDSET", true)
+                util.toast("[" .. T("Police Simulator") .. "] " .. T("Rank Up!") .. "\n" .. T(RANKS[current_rank].name))
+            end
+            break
+        end
+    end
+end
+
+add_rank_points = function(pts)
+    rank_points = rank_points + pts
+    check_rank_up()
+end
+
+get_rank_name = function()
+    return RANKS[current_rank] and T(RANKS[current_rank].name) or T("Cadet")
+end
+
+get_next_rank_info = function()
+    if current_rank >= #RANKS then return nil, 0 end
+    local next = RANKS[current_rank + 1]
+    return T(next.name), next.points - rank_points
+end
+
+-- ==================== SPIKE STRIP ====================
+
+local function deploy_spike_strip()
+    if not police_mode then
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
+        return
+    end
+    if #spike_strips >= max_spike_strips then
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("Max spike strips reached"))
+        return
+    end
+
+    local pos = players.get_position(players.user())
+    local fwd = ENTITY.GET_ENTITY_FORWARD_VECTOR(players.user_ped())
+    local heading = ENTITY.GET_ENTITY_HEADING(players.user_ped())
+
+    local sx = pos.x + fwd.x * 5.0
+    local sy = pos.y + fwd.y * 5.0
+
+    local hash = util.joaat("p_ld_stinger_s")
+    util.request_model(hash)
+
+    local ground = memory.alloc(4)
+    local sz = pos.z
+    if MISC.GET_GROUND_Z_FOR_3D_COORD(sx, sy, pos.z + 5.0, ground, false, false) then
+        sz = memory.read_float(ground)
+    end
+    memory.free(ground)
+
+    local obj = OBJECT.CREATE_OBJECT(hash, sx, sy, sz, true, false, false)
+    if obj ~= 0 then
+        ENTITY.SET_ENTITY_AS_MISSION_ENTITY(obj, true, true)
+        ENTITY.PLACE_ENTITY_ON_GROUND_PROPERLY(obj, true)
+        ENTITY.SET_ENTITY_HEADING(obj, heading + 90.0)
+        ENTITY.FREEZE_ENTITY_POSITION(obj, true)
+
+        local blip = HUD.ADD_BLIP_FOR_COORD(sx, sy, sz)
+        HUD.SET_BLIP_SPRITE(blip, 1)
+        HUD.SET_BLIP_COLOUR(blip, 5)
+        HUD.SET_BLIP_SCALE(blip, 0.5)
+        HUD.SET_BLIP_AS_SHORT_RANGE(blip, true)
+
+        table.insert(spike_strips, {obj = obj, blip = blip, x = sx, y = sy, z = sz})
+        radio_message(T("Spike strip deployed") .. " (" .. #spike_strips .. "/" .. max_spike_strips .. ")")
+    end
+    STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(hash)
+end
+
+local function clear_spike_strips()
+    for _, s in ipairs(spike_strips) do
+        safe_delete(s.obj)
+        remove_blip(s.blip)
+    end
+    spike_strips = {}
+    radio_message(T("All spike strips removed"))
+end
+
+-- ==================== BACKUP SYSTEM ====================
+
+local function request_backup()
+    if not police_mode then
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
+        return
+    end
+    if #backup_units >= max_backup then
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("Max backup reached"))
+        return
+    end
+
+    local pos = players.get_position(players.user())
+    local spawn_pos = get_random_pos_around(pos, 10.0, 25.0)
+
+    local model_hash = util.joaat("s_m_y_cop_01")
+    util.request_model(model_hash)
+
+    local ped = PED.CREATE_PED(4, model_hash, spawn_pos.x, spawn_pos.y, spawn_pos.z, 0.0, true, false)
+    if ped == 0 then
+        STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(model_hash)
+        return
+    end
+
+    ENTITY.SET_ENTITY_AS_MISSION_ENTITY(ped, true, true)
+    ENTITY.SET_ENTITY_INVINCIBLE(ped, false)
+    PED.SET_PED_ARMOUR(ped, 200)
+    ENTITY.SET_ENTITY_MAX_HEALTH(ped, 300)
+    ENTITY.SET_ENTITY_HEALTH(ped, 300, 0)
+
+    WEAPON.GIVE_WEAPON_TO_PED(ped, util.joaat("weapon_carbinerifle"), 300, false, true)
+    WEAPON.GIVE_WEAPON_TO_PED(ped, util.joaat("weapon_pistol"), 200, false, false)
+
+    PED.SET_PED_FLEE_ATTRIBUTES(ped, 0, false)
+    PED.SET_PED_COMBAT_ATTRIBUTES(ped, 46, true)
+    PED.SET_PED_COMBAT_ATTRIBUTES(ped, 5, true)
+    PED.SET_PED_COMBAT_ATTRIBUTES(ped, 0, true)
+    PED.SET_BLOCKING_OF_NON_TEMPORARY_EVENTS(ped, true)
+    PED.SET_PED_ACCURACY(ped, 60)
+
+    PED.SET_PED_AS_GROUP_MEMBER(ped, PLAYER.GET_PLAYER_GROUP(players.user()))
+    PED.SET_PED_RELATIONSHIP_GROUP_HASH(ped, util.joaat("COP"))
+
+    local blip = HUD.ADD_BLIP_FOR_ENTITY(ped)
+    HUD.SET_BLIP_COLOUR(blip, 3)
+    HUD.SET_BLIP_SCALE(blip, 0.6)
+    HUD.SET_BLIP_AS_SHORT_RANGE(blip, true)
+
+    table.insert(backup_units, {ped = ped, blip = blip})
+    STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(model_hash)
+
+    radio_message(T("Backup arrived!") .. " (" .. #backup_units .. "/" .. max_backup .. ")")
+end
+
+local function dismiss_backup()
+    for _, b in ipairs(backup_units) do
+        safe_delete(b.ped)
+        remove_blip(b.blip)
+    end
+    backup_units = {}
+    radio_message(T("All backup dismissed"))
+end
+
+-- ==================== POLICE HELICOPTER ====================
+
+local function deploy_helicopter()
+    if not police_mode then
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
+        return
+    end
+
+    safe_delete(heli_pilot)
+    safe_delete(police_heli)
+    heli_pilot = nil
+    police_heli = nil
+
+    local pos = players.get_position(players.user())
+    local heli_hash = util.joaat("polmav")
+    local pilot_hash = util.joaat("s_m_y_hwaycop_01")
+
+    util.request_model(heli_hash)
+    util.request_model(pilot_hash)
+
+    police_heli = VEHICLE.CREATE_VEHICLE(heli_hash, pos.x, pos.y, pos.z + 40.0, 0.0, true, false, false)
+    if police_heli == 0 then
+        police_heli = nil
+        STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(heli_hash)
+        STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(pilot_hash)
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("Helicopter spawn failed!"))
+        return
+    end
+
+    ENTITY.SET_ENTITY_AS_MISSION_ENTITY(police_heli, true, true)
+    ENTITY.SET_ENTITY_INVINCIBLE(police_heli, true)
+    VEHICLE.SET_VEHICLE_ENGINE_ON(police_heli, true, true, true)
+    VEHICLE.SET_HELI_BLADES_FULL_SPEED(police_heli)
+    VEHICLE.SET_VEHICLE_SEARCHLIGHT(police_heli, true, true)
+
+    heli_pilot = PED.CREATE_PED_INSIDE_VEHICLE(police_heli, 4, pilot_hash, -1, true, false)
+    if heli_pilot ~= 0 then
+        ENTITY.SET_ENTITY_AS_MISSION_ENTITY(heli_pilot, true, true)
+        ENTITY.SET_ENTITY_INVINCIBLE(heli_pilot, true)
+        PED.SET_BLOCKING_OF_NON_TEMPORARY_EVENTS(heli_pilot, true)
+        TASK.TASK_HELI_MISSION(heli_pilot, police_heli, 0, players.user_ped(), 0.0, 0.0, 0.0, 4, 40.0, 40.0, -1.0, -1, 30, -1.0, 0)
+    end
+
+    local blip = HUD.ADD_BLIP_FOR_ENTITY(police_heli)
+    HUD.SET_BLIP_SPRITE(blip, 43)
+    HUD.SET_BLIP_COLOUR(blip, 3)
+    HUD.SET_BLIP_SCALE(blip, 0.8)
+
+    STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(heli_hash)
+    STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(pilot_hash)
+
+    radio_message(T("Air support deployed! Helicopter on station."))
+end
+
+local function dismiss_helicopter()
+    safe_delete(heli_pilot)
+    safe_delete(police_heli)
+    heli_pilot = nil
+    police_heli = nil
+    radio_message(T("Air support dismissed"))
+end
+
+-- ==================== FLASHBANG ====================
+
+local function throw_flashbang()
+    if not police_mode then
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
+        return
+    end
+
+    local pos = players.get_position(players.user())
+    local fwd = ENTITY.GET_ENTITY_FORWARD_VECTOR(players.user_ped())
+    local effect_pos = v3(pos.x + fwd.x * 8.0, pos.y + fwd.y * 8.0, pos.z + 1.0)
+
+    GRAPHICS.ANIMPOSTFX_PLAY("ExplosionJosh3", 1000, false)
+    FIRE.ADD_EXPLOSION(effect_pos.x, effect_pos.y, effect_pos.z, 37, 0.0, true, false, 0.5, false)
+    AUDIO.PLAY_SOUND_FRONTEND(-1, "TIMER_STOP", "HUD_MINI_GAME_SOUNDSET", true)
+
+    local stunned = 0
+    for _, c in ipairs(criminals) do
+        if ENTITY.DOES_ENTITY_EXIST(c.ped) and c.alive and not c.arrested then
+            local crim_pos = ENTITY.GET_ENTITY_COORDS(c.ped, true)
+            if effect_pos:distance(crim_pos) <= 15.0 then
+                NETWORK.NETWORK_REQUEST_CONTROL_OF_ENTITY(c.ped)
+                TASK.CLEAR_PED_TASKS_IMMEDIATELY(c.ped)
+                PED.SET_PED_TO_RAGDOLL(c.ped, 3000, 3000, 0, true, true, false)
+                stunned = stunned + 1
+            end
+        end
+    end
+
+    radio_message(T("Flashbang deployed!") .. " " .. stunned .. " " .. T("stunned"))
+
+    util.create_thread(function()
+        util.yield(3000)
+        for _, c in ipairs(criminals) do
+            if ENTITY.DOES_ENTITY_EXIST(c.ped) and c.alive and not c.arrested and not ENTITY.IS_ENTITY_DEAD(c.ped) then
+                TASK.TASK_COMBAT_PED(c.ped, players.user_ped(), 0, 16)
+            end
+        end
+    end)
+end
+
+-- ==================== TRAFFIC STOP ====================
+
+local function initiate_traffic_stop()
+    if not police_mode then
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
+        return
+    end
+
+    local ped = players.user_ped()
+    local pos = players.get_position(players.user())
+    local fwd = ENTITY.GET_ENTITY_FORWARD_VECTOR(ped)
+
+    local best_veh = nil
+    local best_dist = 50.0
+
+    for _, veh in ipairs(entities.get_all_vehicles_as_handles()) do
+        if ENTITY.DOES_ENTITY_EXIST(veh) and not PED.IS_PED_IN_VEHICLE(ped, veh, false) then
+            local veh_pos = ENTITY.GET_ENTITY_COORDS(veh, true)
+            local dx = veh_pos.x - pos.x
+            local dy = veh_pos.y - pos.y
+            local dist = math.sqrt(dx * dx + dy * dy)
+            if dist <= best_dist and dist > 0 then
+                local dot = (dx / dist) * fwd.x + (dy / dist) * fwd.y
+                if dot > 0.5 then
+                    best_dist = dist
+                    best_veh = veh
+                end
+            end
+        end
+    end
+
+    if not best_veh then
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("No vehicle ahead"))
+        return
+    end
+
+    traffic_stop_target = best_veh
+    traffic_stop_active = true
+
+    NETWORK.NETWORK_REQUEST_CONTROL_OF_ENTITY(best_veh)
+    util.yield(200)
+
+    VEHICLE.SET_VEHICLE_INDICATOR_LIGHTS(best_veh, 0, true)
+    VEHICLE.SET_VEHICLE_INDICATOR_LIGHTS(best_veh, 1, true)
+    VEHICLE.SET_VEHICLE_FORWARD_SPEED(best_veh, 0.0)
+
+    local driver = VEHICLE.GET_PED_IN_VEHICLE_SEAT(best_veh, -1, false)
+    if driver ~= 0 then
+        NETWORK.NETWORK_REQUEST_CONTROL_OF_ENTITY(driver)
+        TASK.CLEAR_PED_TASKS_IMMEDIATELY(driver)
+        TASK.TASK_VEHICLE_TEMP_ACTION(driver, best_veh, 1, 5000)
+    end
+
+    if patrol_vehicle and ENTITY.DOES_ENTITY_EXIST(patrol_vehicle) then
+        VEHICLE.SET_VEHICLE_SIREN(patrol_vehicle, true)
+        siren_on = true
+    end
+
+    local blip = HUD.ADD_BLIP_FOR_ENTITY(best_veh)
+    HUD.SET_BLIP_COLOUR(blip, 5)
+    HUD.SET_BLIP_SCALE(blip, 0.7)
+
+    radio_message(T("Traffic stop initiated"))
+end
+
+local function order_driver_out()
+    if not traffic_stop_active or not traffic_stop_target then
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("No active traffic stop"))
+        return
+    end
+
+    if not ENTITY.DOES_ENTITY_EXIST(traffic_stop_target) then
+        traffic_stop_active = false
+        traffic_stop_target = nil
+        return
+    end
+
+    local driver = VEHICLE.GET_PED_IN_VEHICLE_SEAT(traffic_stop_target, -1, false)
+    if driver ~= 0 then
+        NETWORK.NETWORK_REQUEST_CONTROL_OF_ENTITY(driver)
+        TASK.TASK_LEAVE_VEHICLE(driver, traffic_stop_target, 0)
+        util.create_thread(function()
+            util.yield(3000)
+            if ENTITY.DOES_ENTITY_EXIST(driver) and not PED.IS_PED_IN_ANY_VEHICLE(driver, false) then
+                TASK.TASK_HANDS_UP(driver, 10000, players.user_ped(), -1, false)
+            end
+        end)
+    end
+
+    radio_message(T("Driver ordered out of vehicle"))
+end
+
+local function end_traffic_stop()
+    if traffic_stop_target and ENTITY.DOES_ENTITY_EXIST(traffic_stop_target) then
+        local driver = VEHICLE.GET_PED_IN_VEHICLE_SEAT(traffic_stop_target, -1, false)
+        if driver ~= 0 then
+            NETWORK.NETWORK_REQUEST_CONTROL_OF_ENTITY(driver)
+            TASK.CLEAR_PED_TASKS_IMMEDIATELY(driver)
+        end
+        VEHICLE.SET_VEHICLE_INDICATOR_LIGHTS(traffic_stop_target, 0, false)
+        VEHICLE.SET_VEHICLE_INDICATOR_LIGHTS(traffic_stop_target, 1, false)
+    end
+    traffic_stop_target = nil
+    traffic_stop_active = false
+    radio_message(T("Traffic stop ended"))
+end
+
+-- ==================== ROADBLOCK ====================
+
+local function deploy_roadblock()
+    if not police_mode then
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
+        return
+    end
+
+    local pos = players.get_position(players.user())
+    local fwd = ENTITY.GET_ENTITY_FORWARD_VECTOR(players.user_ped())
+    local heading = ENTITY.GET_ENTITY_HEADING(players.user_ped())
+
+    local base_x = pos.x + fwd.x * 15.0
+    local base_y = pos.y + fwd.y * 15.0
+    local base_z = pos.z
+
+    local ground = memory.alloc(4)
+    if MISC.GET_GROUND_Z_FOR_3D_COORD(base_x, base_y, base_z + 10.0, ground, false, false) then
+        base_z = memory.read_float(ground)
+    end
+    memory.free(ground)
+
+    local right_x = -fwd.y
+    local right_y = fwd.x
+
+    -- Police vehicles as roadblock
+    for i = -1, 1, 2 do
+        local veh_hash = util.joaat("police")
+        util.request_model(veh_hash)
+        local ox = base_x + right_x * (i * 4.0)
+        local oy = base_y + right_y * (i * 4.0)
+        local veh = VEHICLE.CREATE_VEHICLE(veh_hash, ox, oy, base_z, heading + 45.0 * i, true, false, false)
+        if veh ~= 0 then
+            ENTITY.SET_ENTITY_AS_MISSION_ENTITY(veh, true, true)
+            VEHICLE.SET_VEHICLE_ON_GROUND_PROPERLY(veh, 5.0)
+            ENTITY.FREEZE_ENTITY_POSITION(veh, true)
+            ENTITY.SET_ENTITY_INVINCIBLE(veh, true)
+            VEHICLE.SET_VEHICLE_SIREN(veh, true)
+            table.insert(roadblock_objects, veh)
+        end
+        STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(veh_hash)
+    end
+
+    -- Barriers
+    for i = -2, 2 do
+        local hash = util.joaat("prop_barrier_work05")
+        util.request_model(hash)
+        local ox = base_x + right_x * (i * 2.5)
+        local oy = base_y + right_y * (i * 2.5)
+        local obj = OBJECT.CREATE_OBJECT(hash, ox, oy, base_z, true, false, false)
+        if obj ~= 0 then
+            ENTITY.SET_ENTITY_AS_MISSION_ENTITY(obj, true, true)
+            ENTITY.PLACE_ENTITY_ON_GROUND_PROPERLY(obj, true)
+            ENTITY.SET_ENTITY_HEADING(obj, heading + 90.0)
+            ENTITY.FREEZE_ENTITY_POSITION(obj, true)
+            table.insert(roadblock_objects, obj)
+        end
+        STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(hash)
+    end
+
+    -- Cones
+    for i = -1, 1, 2 do
+        local hash = util.joaat("prop_roadcone01a")
+        util.request_model(hash)
+        local ox = base_x + right_x * (i * 7.0)
+        local oy = base_y + right_y * (i * 7.0)
+        local obj = OBJECT.CREATE_OBJECT(hash, ox, oy, base_z, true, false, false)
+        if obj ~= 0 then
+            ENTITY.SET_ENTITY_AS_MISSION_ENTITY(obj, true, true)
+            ENTITY.PLACE_ENTITY_ON_GROUND_PROPERLY(obj, true)
+            ENTITY.FREEZE_ENTITY_POSITION(obj, true)
+            table.insert(roadblock_objects, obj)
+        end
+        STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(hash)
+    end
+
+    radio_message(T("Roadblock deployed"))
+end
+
+local function clear_roadblocks()
+    for _, obj in ipairs(roadblock_objects) do
+        safe_delete(obj)
+    end
+    roadblock_objects = {}
+    radio_message(T("All roadblocks cleared"))
+end
+
+-- ==================== BOUNTY BOARD ====================
+
+local function generate_bounty()
+    if not police_mode then
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
+        return
+    end
+    if #bounty_targets >= max_bounties then
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("Max bounties reached"))
+        return
+    end
+
+    local pos = players.get_position(players.user())
+    local target_pos = get_random_pos_around(pos, 80.0, 200.0)
+
+    local model_hash = util.joaat(CRIMINAL_MODELS[math.random(1, #CRIMINAL_MODELS)])
+    util.request_model(model_hash)
+
+    local ped = PED.CREATE_PED(4, model_hash, target_pos.x, target_pos.y, target_pos.z, math.random(0, 360) * 1.0, true, false)
+    if ped == 0 then
+        STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(model_hash)
+        return
+    end
+
+    ENTITY.SET_ENTITY_AS_MISSION_ENTITY(ped, true, true)
+
+    local base_hp = ENTITY.GET_ENTITY_MAX_HEALTH(ped)
+    ENTITY.SET_ENTITY_MAX_HEALTH(ped, base_hp * 3)
+    ENTITY.SET_ENTITY_HEALTH(ped, base_hp * 3, 0)
+    PED.SET_PED_ARMOUR(ped, 100)
+
+    WEAPON.GIVE_WEAPON_TO_PED(ped, util.joaat("weapon_assaultrifle"), 500, false, true)
+    WEAPON.GIVE_WEAPON_TO_PED(ped, util.joaat("weapon_rpg"), 5, false, false)
+
+    PED.SET_PED_FLEE_ATTRIBUTES(ped, 0, false)
+    PED.SET_PED_COMBAT_ATTRIBUTES(ped, 46, true)
+    PED.SET_PED_COMBAT_ATTRIBUTES(ped, 5, true)
+    PED.SET_BLOCKING_OF_NON_TEMPORARY_EVENTS(ped, true)
+    PED.SET_PED_ACCURACY(ped, 50)
+    PED.SET_PED_AS_ENEMY(ped, true)
+    TASK.TASK_COMBAT_PED(ped, players.user_ped(), 0, 16)
+
+    local blip = HUD.ADD_BLIP_FOR_ENTITY(ped)
+    HUD.SET_BLIP_SPRITE(blip, 303)
+    HUD.SET_BLIP_COLOUR(blip, 6)
+    HUD.SET_BLIP_SCALE(blip, 1.0)
+    HUD.SET_BLIP_AS_SHORT_RANGE(blip, false)
+    HUD.SET_BLIP_FLASHES(blip, true)
+    HUD.SET_BLIP_FLASH_TIMER(blip, 5000)
+
+    local bounty_name = T("Most Wanted") .. " #" .. (#bounty_targets + 1)
+    local bounty_reward = 5 + math.random(1, 5)
+
+    table.insert(bounty_targets, {
+        ped = ped,
+        blip = blip,
+        name = bounty_name,
+        reward = bounty_reward,
+        alive = true,
+    })
+
+    STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(model_hash)
+    radio_message(bounty_name .. " " .. T("spotted!") .. " " .. T("Reward") .. ": +" .. bounty_reward .. " " .. T("pts"))
+end
+
+local function clear_bounties()
+    for _, b in ipairs(bounty_targets) do
+        safe_delete(b.ped)
+        remove_blip(b.blip)
+    end
+    bounty_targets = {}
+    radio_message(T("All bounties cleared"))
+end
+
+-- ==================== WARNING SHOT ====================
+
+local function fire_warning_shot()
+    if not police_mode then
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
+        return
+    end
+
+    local pos = players.get_position(players.user())
+    MISC.SHOOT_SINGLE_BULLET_BETWEEN_COORDS(
+        pos.x, pos.y, pos.z + 1.5,
+        pos.x, pos.y, pos.z + 50.0,
+        0, false, util.joaat("weapon_pistol"), players.user_ped(), true, true, 300.0
+    )
+
+    AUDIO.PLAY_SOUND_FRONTEND(-1, "CONFIRM_BEEP", "HUD_MINI_GAME_SOUNDSET", true)
+
+    local scared = 0
+    for _, c in ipairs(criminals) do
+        if ENTITY.DOES_ENTITY_EXIST(c.ped) and c.alive and not c.arrested then
+            local crim_pos = ENTITY.GET_ENTITY_COORDS(c.ped, true)
+            if pos:distance(crim_pos) <= 30.0 then
+                if math.random(1, 100) <= criminal_flee_chance then
+                    NETWORK.NETWORK_REQUEST_CONTROL_OF_ENTITY(c.ped)
+                    TASK.CLEAR_PED_TASKS_IMMEDIATELY(c.ped)
+                    TASK.TASK_SMART_FLEE_PED(c.ped, players.user_ped(), 100.0, -1, false, false)
+                    c.fleeing = true
+                    scared = scared + 1
+                end
+            end
+        end
+    end
+
+    radio_message(T("Warning shot fired!") .. (scared > 0 and (" " .. scared .. " " .. T("fled")) or ""))
+end
+
+-- ==================== K9 UNIT ====================
+
+local function deploy_k9()
+    if not police_mode then
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
+        return
+    end
+
+    safe_delete(k9_dog)
+    remove_blip(k9_blip)
+    k9_dog = nil
+    k9_blip = nil
+
+    local pos = players.get_position(players.user())
+    local fwd = ENTITY.GET_ENTITY_FORWARD_VECTOR(players.user_ped())
+
+    local dog_hash = util.joaat("a_c_shepherd")
+    util.request_model(dog_hash)
+
+    k9_dog = PED.CREATE_PED(28, dog_hash, pos.x + fwd.x * 3.0, pos.y + fwd.y * 3.0, pos.z, ENTITY.GET_ENTITY_HEADING(players.user_ped()), true, false)
+    if k9_dog == 0 then
+        k9_dog = nil
+        STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(dog_hash)
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("K9 spawn failed!"))
+        return
+    end
+
+    ENTITY.SET_ENTITY_AS_MISSION_ENTITY(k9_dog, true, true)
+    ENTITY.SET_ENTITY_INVINCIBLE(k9_dog, true)
+    PED.SET_PED_FLEE_ATTRIBUTES(k9_dog, 0, false)
+    PED.SET_PED_COMBAT_ATTRIBUTES(k9_dog, 46, true)
+    PED.SET_PED_COMBAT_ATTRIBUTES(k9_dog, 5, true)
+    PED.SET_PED_COMBAT_ATTRIBUTES(k9_dog, 0, true)
+    PED.SET_BLOCKING_OF_NON_TEMPORARY_EVENTS(k9_dog, true)
+    PED.SET_PED_COMBAT_ABILITY(k9_dog, 2)
+
+    PED.SET_PED_AS_GROUP_MEMBER(k9_dog, PLAYER.GET_PLAYER_GROUP(players.user()))
+    PED.SET_PED_RELATIONSHIP_GROUP_HASH(k9_dog, util.joaat("COP"))
+
+    k9_blip = HUD.ADD_BLIP_FOR_ENTITY(k9_dog)
+    HUD.SET_BLIP_SPRITE(k9_blip, 1)
+    HUD.SET_BLIP_COLOUR(k9_blip, 11)
+    HUD.SET_BLIP_SCALE(k9_blip, 0.5)
+    HUD.SET_BLIP_AS_SHORT_RANGE(k9_blip, true)
+
+    STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(dog_hash)
+    radio_message(T("K9 unit deployed!"))
+end
+
+local function dismiss_k9()
+    safe_delete(k9_dog)
+    remove_blip(k9_blip)
+    k9_dog = nil
+    k9_blip = nil
+    radio_message(T("K9 unit dismissed"))
+end
+
+local function k9_attack_nearest()
+    if not k9_dog or not ENTITY.DOES_ENTITY_EXIST(k9_dog) then
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("No K9 unit deployed"))
+        return
+    end
+
+    local closest = get_closest_criminal()
+    if not closest then
+        -- Also check bounty targets
+        local nearest_dist = 999999.0
+        local nearest_ped = nil
+        local dog_pos = ENTITY.GET_ENTITY_COORDS(k9_dog, true)
+        for _, b in ipairs(bounty_targets) do
+            if ENTITY.DOES_ENTITY_EXIST(b.ped) and b.alive and not ENTITY.IS_ENTITY_DEAD(b.ped) then
+                local dist = dog_pos:distance(ENTITY.GET_ENTITY_COORDS(b.ped, true))
+                if dist < nearest_dist then
+                    nearest_dist = dist
+                    nearest_ped = b.ped
+                end
+            end
+        end
+        if nearest_ped then
+            NETWORK.NETWORK_REQUEST_CONTROL_OF_ENTITY(k9_dog)
+            TASK.TASK_COMBAT_PED(k9_dog, nearest_ped, 0, 16)
+            radio_message(T("K9 attacking suspect!"))
+            return
+        end
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("No criminals nearby."))
+        return
+    end
+
+    NETWORK.NETWORK_REQUEST_CONTROL_OF_ENTITY(k9_dog)
+    TASK.TASK_COMBAT_PED(k9_dog, closest.ped, 0, 16)
+    radio_message(T("K9 attacking suspect!"))
+end
+
+local function k9_follow()
+    if not k9_dog or not ENTITY.DOES_ENTITY_EXIST(k9_dog) then
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("No K9 unit deployed"))
+        return
+    end
+    NETWORK.NETWORK_REQUEST_CONTROL_OF_ENTITY(k9_dog)
+    TASK.CLEAR_PED_TASKS_IMMEDIATELY(k9_dog)
+    TASK.TASK_FOLLOW_TO_OFFSET_OF_ENTITY(k9_dog, players.user_ped(), 0.0, -1.5, 0.0, 5.0, -1, 2.0, true)
+    radio_message(T("K9 following"))
+end
+
+-- ==================== SWAT RAID ====================
+
+local function call_swat()
+    if not police_mode then
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
+        return
+    end
+    if #swat_team >= max_swat then
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("SWAT team already deployed"))
+        return
+    end
+
+    local pos = players.get_position(players.user())
+    local fwd = ENTITY.GET_ENTITY_FORWARD_VECTOR(players.user_ped())
+
+    -- Spawn SWAT van
+    local van_hash = util.joaat("riot")
+    util.request_model(van_hash)
+    local van_pos = v3(pos.x - fwd.x * 20.0, pos.y - fwd.y * 20.0, pos.z)
+
+    local ground = memory.alloc(4)
+    if MISC.GET_GROUND_Z_FOR_3D_COORD(van_pos.x, van_pos.y, van_pos.z + 10.0, ground, false, false) then
+        van_pos.z = memory.read_float(ground)
+    end
+    memory.free(ground)
+
+    safe_delete(swat_vehicle)
+    swat_vehicle = VEHICLE.CREATE_VEHICLE(van_hash, van_pos.x, van_pos.y, van_pos.z + 0.5, ENTITY.GET_ENTITY_HEADING(players.user_ped()) + 180.0, true, false, false)
+    if swat_vehicle ~= 0 then
+        ENTITY.SET_ENTITY_AS_MISSION_ENTITY(swat_vehicle, true, true)
+        VEHICLE.SET_VEHICLE_ON_GROUND_PROPERLY(swat_vehicle, 5.0)
+        ENTITY.SET_ENTITY_INVINCIBLE(swat_vehicle, true)
+        VEHICLE.SET_VEHICLE_SIREN(swat_vehicle, true)
+    end
+    STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(van_hash)
+
+    -- Spawn SWAT members
+    local swat_hash = util.joaat("s_m_y_swat_01")
+    util.request_model(swat_hash)
+
+    local swat_weapons = {"weapon_carbinerifle", "weapon_smg", "weapon_pumpshotgun", "weapon_assaultshotgun", "weapon_specialcarbine"}
+
+    for i = 1, max_swat do
+        local angle = (i / max_swat) * math.pi * 2
+        local sx = pos.x + math.cos(angle) * 8.0
+        local sy = pos.y + math.sin(angle) * 8.0
+
+        local ped = PED.CREATE_PED(4, swat_hash, sx, sy, pos.z, 0.0, true, false)
+        if ped ~= 0 then
+            ENTITY.SET_ENTITY_AS_MISSION_ENTITY(ped, true, true)
+            ENTITY.SET_ENTITY_INVINCIBLE(ped, false)
+            PED.SET_PED_ARMOUR(ped, 300)
+            ENTITY.SET_ENTITY_MAX_HEALTH(ped, 400)
+            ENTITY.SET_ENTITY_HEALTH(ped, 400, 0)
+
+            local wpn = swat_weapons[math.random(1, #swat_weapons)]
+            WEAPON.GIVE_WEAPON_TO_PED(ped, util.joaat(wpn), 500, false, true)
+            WEAPON.GIVE_WEAPON_TO_PED(ped, util.joaat("weapon_pistol"), 200, false, false)
+
+            PED.SET_PED_FLEE_ATTRIBUTES(ped, 0, false)
+            PED.SET_PED_COMBAT_ATTRIBUTES(ped, 46, true)
+            PED.SET_PED_COMBAT_ATTRIBUTES(ped, 5, true)
+            PED.SET_PED_COMBAT_ATTRIBUTES(ped, 0, true)
+            PED.SET_PED_COMBAT_ATTRIBUTES(ped, 2, true)
+            PED.SET_BLOCKING_OF_NON_TEMPORARY_EVENTS(ped, true)
+            PED.SET_PED_ACCURACY(ped, 70)
+            PED.SET_PED_COMBAT_ABILITY(ped, 2)
+
+            PED.SET_PED_AS_GROUP_MEMBER(ped, PLAYER.GET_PLAYER_GROUP(players.user()))
+            PED.SET_PED_RELATIONSHIP_GROUP_HASH(ped, util.joaat("COP"))
+
+            local blip = HUD.ADD_BLIP_FOR_ENTITY(ped)
+            HUD.SET_BLIP_COLOUR(blip, 38)
+            HUD.SET_BLIP_SCALE(blip, 0.5)
+            HUD.SET_BLIP_AS_SHORT_RANGE(blip, true)
+
+            table.insert(swat_team, {ped = ped, blip = blip})
+        end
+    end
+
+    STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(swat_hash)
+    radio_message(T("SWAT team deployed!") .. " " .. #swat_team .. " " .. T("operators on site"))
+    AUDIO.PLAY_SOUND_FRONTEND(-1, "CONFIRM_BEEP", "HUD_MINI_GAME_SOUNDSET", true)
+    add_rank_points(2)
+end
+
+local function dismiss_swat()
+    for _, s in ipairs(swat_team) do
+        safe_delete(s.ped)
+        remove_blip(s.blip)
+    end
+    swat_team = {}
+    safe_delete(swat_vehicle)
+    swat_vehicle = nil
+    radio_message(T("SWAT team dismissed"))
+end
+
+-- ==================== UNDERCOVER MODE ====================
+
+local UNDERCOVER_MODELS = {
+    "a_m_y_business_01", "a_m_y_hipster_01", "a_m_y_soucent_01",
+    "a_m_y_vinewood_01", "a_m_y_downtown_01", "a_f_y_business_01",
+}
+
+local UNDERCOVER_VEHICLES = {
+    "sultan", "buffalo", "oracle2", "tailgater", "felon", "schafter2",
+}
+
+local function toggle_undercover()
+    if not police_mode then
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
+        return
+    end
+
+    if undercover_mode then
+        -- Switch back to police uniform
+        local model_info = POLICE_MODELS[selected_model_idx]
+        local model_hash = util.joaat(model_info.hash)
+        util.request_model(model_hash)
+
+        local cur_ped = players.user_ped()
+        local cur_pos = players.get_position(players.user())
+        local heading = ENTITY.GET_ENTITY_HEADING(cur_ped)
+
+        local new_ped = PED.CREATE_PED(4, model_hash, cur_pos.x, cur_pos.y, cur_pos.z, heading, true, false)
+        if new_ped ~= 0 then
+            ENTITY.SET_ENTITY_AS_MISSION_ENTITY(new_ped, true, true)
+            PED.SET_PED_DEFAULT_COMPONENT_VARIATION(new_ped)
+            PED.SET_PED_CONFIG_FLAG(new_ped, 35, false)
+            PLAYER.CHANGE_PLAYER_PED(players.user(), new_ped, false, false)
+            util.yield(500)
+
+            if cur_ped ~= players.user_ped() and ENTITY.DOES_ENTITY_EXIST(cur_ped) then
+                safe_delete(cur_ped)
+            end
+            give_police_weapons(players.user_ped())
+        end
+        STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(model_hash)
+
+        undercover_mode = false
+        radio_message(T("Back in uniform. Undercover mode off."))
+    else
+        -- Switch to civilian
+        local civ_model = UNDERCOVER_MODELS[math.random(1, #UNDERCOVER_MODELS)]
+        local model_hash = util.joaat(civ_model)
+        util.request_model(model_hash)
+
+        local cur_ped = players.user_ped()
+        local cur_pos = players.get_position(players.user())
+        local heading = ENTITY.GET_ENTITY_HEADING(cur_ped)
+
+        local new_ped = PED.CREATE_PED(4, model_hash, cur_pos.x, cur_pos.y, cur_pos.z, heading, true, false)
+        if new_ped ~= 0 then
+            ENTITY.SET_ENTITY_AS_MISSION_ENTITY(new_ped, true, true)
+            PED.SET_PED_DEFAULT_COMPONENT_VARIATION(new_ped)
+            PED.SET_PED_CONFIG_FLAG(new_ped, 35, false)
+            PLAYER.CHANGE_PLAYER_PED(players.user(), new_ped, false, false)
+            util.yield(500)
+
+            if cur_ped ~= players.user_ped() and ENTITY.DOES_ENTITY_EXIST(cur_ped) then
+                safe_delete(cur_ped)
+            end
+            -- Give concealed weapons only
+            WEAPON.GIVE_WEAPON_TO_PED(players.user_ped(), util.joaat("weapon_snspistol"), 100, false, true)
+            WEAPON.GIVE_WEAPON_TO_PED(players.user_ped(), util.joaat("weapon_switchblade"), 1, false, false)
+        end
+        STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(model_hash)
+
+        undercover_mode = true
+        radio_message(T("Undercover mode activated. Blend in."))
+    end
+end
+
+local function spawn_undercover_vehicle()
+    if not police_mode then
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
+        return
+    end
+
+    local veh_model = UNDERCOVER_VEHICLES[math.random(1, #UNDERCOVER_VEHICLES)]
+    local veh_hash = util.joaat(veh_model)
+    util.request_model(veh_hash)
+
+    local pos = players.get_position(players.user())
+    local heading = ENTITY.GET_ENTITY_HEADING(players.user_ped())
+    local spawn_x = pos.x + math.cos(math.rad(heading)) * 5.0
+    local spawn_y = pos.y + math.sin(math.rad(heading)) * 5.0
+
+    local veh = VEHICLE.CREATE_VEHICLE(veh_hash, spawn_x, spawn_y, pos.z + 0.5, heading, true, false, false)
+    if veh ~= 0 then
+        ENTITY.SET_ENTITY_AS_MISSION_ENTITY(veh, true, true)
+        VEHICLE.SET_VEHICLE_ON_GROUND_PROPERLY(veh, 5.0)
+        VEHICLE.SET_VEHICLE_ENGINE_ON(veh, true, true, true)
+        VEHICLE.SET_VEHICLE_MOD_KIT(veh, 0)
+        -- Random color
+        local r, g, b = math.random(0, 255), math.random(0, 255), math.random(0, 255)
+        VEHICLE.SET_VEHICLE_CUSTOM_PRIMARY_COLOUR(veh, r, g, b)
+        VEHICLE.SET_VEHICLE_CUSTOM_SECONDARY_COLOUR(veh, r, g, b)
+        -- Tinted windows
+        VEHICLE.SET_VEHICLE_WINDOW_TINT(veh, 1)
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("Undercover vehicle spawned"))
+    end
+    STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(veh_hash)
+end
+
+-- ==================== SMOKE GRENADE ====================
+
+local function throw_smoke_grenade()
+    if not police_mode then
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
+        return
+    end
+
+    local pos = players.get_position(players.user())
+    local fwd = ENTITY.GET_ENTITY_FORWARD_VECTOR(players.user_ped())
+    local effect_pos = v3(pos.x + fwd.x * 10.0, pos.y + fwd.y * 10.0, pos.z)
+
+    -- Use PTFX for smoke
+    GRAPHICS.REQUEST_NAMED_PTFX_ASSET("core")
+    local attempts = 0
+    while not GRAPHICS.HAS_NAMED_PTFX_ASSET_LOADED("core") and attempts < 50 do
+        util.yield(10)
+        attempts = attempts + 1
+    end
+
+    GRAPHICS.USE_PARTICLE_FX_ASSET("core")
+    GRAPHICS.START_NETWORKED_PARTICLE_FX_NON_LOOPED_AT_COORD(
+        "exp_grd_smoke_thin", effect_pos.x, effect_pos.y, effect_pos.z,
+        0.0, 0.0, 0.0, 3.0, false, false, false, false
+    )
+
+    -- Additional smoke puffs
+    for i = 1, 5 do
+        util.yield(200)
+        local ox = effect_pos.x + math.random(-3, 3) * 1.0
+        local oy = effect_pos.y + math.random(-3, 3) * 1.0
+        GRAPHICS.USE_PARTICLE_FX_ASSET("core")
+        GRAPHICS.START_NETWORKED_PARTICLE_FX_NON_LOOPED_AT_COORD(
+            "exp_grd_smoke_thin", ox, oy, effect_pos.z,
+            0.0, 0.0, 0.0, 2.0, false, false, false, false
+        )
+    end
+
+    AUDIO.PLAY_SOUND_FRONTEND(-1, "CONFIRM_BEEP", "HUD_MINI_GAME_SOUNDSET", true)
+
+    -- Blind nearby criminals
+    local blinded = 0
+    for _, c in ipairs(criminals) do
+        if ENTITY.DOES_ENTITY_EXIST(c.ped) and c.alive and not c.arrested then
+            local crim_pos = ENTITY.GET_ENTITY_COORDS(c.ped, true)
+            if effect_pos:distance(crim_pos) <= 12.0 then
+                NETWORK.NETWORK_REQUEST_CONTROL_OF_ENTITY(c.ped)
+                TASK.CLEAR_PED_TASKS_IMMEDIATELY(c.ped)
+                TASK.TASK_WANDER_STANDARD(c.ped, 10.0, 10)
+                PED.SET_PED_ACCURACY(c.ped, 5)
+                blinded = blinded + 1
+            end
+        end
+    end
+
+    radio_message(T("Smoke grenade deployed!") .. " " .. blinded .. " " .. T("blinded"))
+
+    -- Restore accuracy after smoke clears
+    util.create_thread(function()
+        util.yield(8000)
+        for _, c in ipairs(criminals) do
+            if ENTITY.DOES_ENTITY_EXIST(c.ped) and c.alive and not c.arrested and not ENTITY.IS_ENTITY_DEAD(c.ped) then
+                PED.SET_PED_ACCURACY(c.ped, criminal_accuracy)
+                TASK.TASK_COMBAT_PED(c.ped, players.user_ped(), 0, 16)
+            end
+        end
+    end)
+end
+
+-- ==================== SPEED TRAP ====================
+
+local function toggle_speed_trap()
+    if not police_mode then
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
+        return
+    end
+
+    if speed_trap_active then
+        speed_trap_active = false
+        remove_blip(speed_trap_blip)
+        speed_trap_blip = nil
+        speed_trap_pos = nil
+        radio_message(T("Speed trap deactivated. Fines issued") .. ": " .. speed_trap_fines)
+        if speed_trap_fines > 0 then
+            add_rank_points(math.floor(speed_trap_fines / 2))
+        end
+        speed_trap_fines = 0
+    else
+        local pos = players.get_position(players.user())
+        speed_trap_pos = {x = pos.x, y = pos.y, z = pos.z}
+        speed_trap_active = true
+        speed_trap_fines = 0
+
+        speed_trap_blip = HUD.ADD_BLIP_FOR_COORD(pos.x, pos.y, pos.z)
+        HUD.SET_BLIP_SPRITE(speed_trap_blip, 1)
+        HUD.SET_BLIP_COLOUR(speed_trap_blip, 5)
+        HUD.SET_BLIP_SCALE(speed_trap_blip, 0.7)
+        HUD.SET_BLIP_AS_SHORT_RANGE(speed_trap_blip, true)
+
+        radio_message(T("Speed trap activated! Limit") .. ": " .. math.floor(speed_trap_limit) .. " km/h")
+    end
+end
+
+-- ==================== PRISONER TRANSPORT ====================
+
+local function start_prisoner_transport()
+    if not police_mode then
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
+        return
+    end
+
+    -- Count arrested criminals
+    local arrested_count = 0
+    for _, c in ipairs(criminals) do
+        if c.arrested then
+            arrested_count = arrested_count + 1
+        end
+    end
+
+    if arrested_count == 0 then
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("No prisoners to transport"))
+        return
+    end
+
+    -- Spawn transport van
+    safe_delete(transport_vehicle)
+    local van_hash = util.joaat("policet")
+    util.request_model(van_hash)
+
+    local pos = players.get_position(players.user())
+    local heading = ENTITY.GET_ENTITY_HEADING(players.user_ped())
+    local spawn_x = pos.x + math.cos(math.rad(heading)) * 5.0
+    local spawn_y = pos.y + math.sin(math.rad(heading)) * 5.0
+
+    transport_vehicle = VEHICLE.CREATE_VEHICLE(van_hash, spawn_x, spawn_y, pos.z + 0.5, heading, true, false, false)
+    if transport_vehicle == 0 then
+        transport_vehicle = nil
+        STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(van_hash)
+        return
+    end
+
+    ENTITY.SET_ENTITY_AS_MISSION_ENTITY(transport_vehicle, true, true)
+    VEHICLE.SET_VEHICLE_ON_GROUND_PROPERLY(transport_vehicle, 5.0)
+    ENTITY.SET_ENTITY_INVINCIBLE(transport_vehicle, true)
+    STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(van_hash)
+
+    transport_prisoners = arrested_count
+    transport_active = true
+
+    -- Set random destination (police station area)
+    local destinations = {
+        {x = 441.1, y = -982.0, z = 30.7},    -- Mission Row PD
+        {x = -1108.5, y = -845.0, z = 19.3},  -- Rockford Hills PD
+        {x = 826.1, y = -1290.0, z = 28.2},   -- La Mesa PD
+        {x = -449.7, y = 6012.0, z = 31.7},   -- Paleto Bay Sheriff
+        {x = 1853.0, y = 3686.0, z = 34.3},   -- Sandy Shores Sheriff
+    }
+    local dest = destinations[math.random(1, #destinations)]
+    transport_dest_pos = dest
+
+    remove_blip(transport_dest_blip)
+    transport_dest_blip = HUD.ADD_BLIP_FOR_COORD(dest.x, dest.y, dest.z)
+    HUD.SET_BLIP_SPRITE(transport_dest_blip, 188)
+    HUD.SET_BLIP_COLOUR(transport_dest_blip, 3)
+    HUD.SET_BLIP_SCALE(transport_dest_blip, 1.0)
+    HUD.SET_BLIP_AS_SHORT_RANGE(transport_dest_blip, false)
+    HUD.SET_BLIP_ROUTE(transport_dest_blip, true)
+    HUD.SET_BLIP_ROUTE_COLOUR(transport_dest_blip, 3)
+
+    -- Remove arrested criminals from the world
+    for i = #criminals, 1, -1 do
+        local c = criminals[i]
+        if c.arrested then
+            safe_delete(c.ped)
+            safe_delete(c.vehicle)
+            remove_blip(c.blip)
+            table.remove(criminals, i)
+        end
+    end
+
+    radio_message(T("Prisoner transport started!") .. " " .. transport_prisoners .. " " .. T("prisoners. Follow GPS."))
+end
+
+local function complete_transport()
+    if not transport_active then return end
+
+    local reward = transport_prisoners * 5
+    add_rank_points(reward)
+
+    safe_delete(transport_vehicle)
+    transport_vehicle = nil
+    remove_blip(transport_dest_blip)
+    transport_dest_blip = nil
+    transport_dest_pos = nil
+    transport_active = false
+
+    radio_message(T("Prisoners delivered!") .. " +" .. reward .. " " .. T("pts"))
+    AUDIO.PLAY_SOUND_FRONTEND(-1, "MEDAL_UP", "HUD_MINI_GAME_SOUNDSET", true)
+    transport_prisoners = 0
+end
+
+local function cancel_transport()
+    safe_delete(transport_vehicle)
+    transport_vehicle = nil
+    remove_blip(transport_dest_blip)
+    transport_dest_blip = nil
+    transport_dest_pos = nil
+    transport_active = false
+    transport_prisoners = 0
+    radio_message(T("Prisoner transport cancelled"))
+end
+
+-- ==================== DIFFICULTY SYSTEM ====================
+
+local function apply_difficulty(level)
+    if level < 1 or level > #DIFFICULTY_PRESETS then return end
+    difficulty_level = level
+    local preset = DIFFICULTY_PRESETS[level]
+    criminal_accuracy = preset.accuracy
+    criminal_health_mult = preset.health
+    criminal_flee_chance = preset.flee
+    criminal_vehicle_chance = preset.vehicle
+    radio_message(T("Difficulty") .. ": " .. T(preset.name))
+end
+
+-- ==================== NEW TICK HANDLERS ====================
+
+-- Spike strip tire popping
+util.create_tick_handler(function()
+    if not police_mode or #spike_strips == 0 then return end
+
+    local player_ped = players.user_ped()
+    for _, s in ipairs(spike_strips) do
+        if s.obj and ENTITY.DOES_ENTITY_EXIST(s.obj) then
+            for _, veh in ipairs(entities.get_all_vehicles_as_handles()) do
+                if ENTITY.DOES_ENTITY_EXIST(veh) and not PED.IS_PED_IN_VEHICLE(player_ped, veh, false) then
+                    local veh_pos = ENTITY.GET_ENTITY_COORDS(veh, true)
+                    local dx = veh_pos.x - s.x
+                    local dy = veh_pos.y - s.y
+                    local dist = math.sqrt(dx * dx + dy * dy)
+                    if dist <= spike_radius then
+                        local speed = ENTITY.GET_ENTITY_SPEED(veh)
+                        if speed > 2.0 then
+                            NETWORK.NETWORK_REQUEST_CONTROL_OF_ENTITY(veh)
+                            for tire = 0, 7 do
+                                VEHICLE.SET_VEHICLE_TYRE_BURST(veh, tire, true, 1000.0)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+end)
+
+-- Bounty target tracking
+util.create_tick_handler(function()
+    if not police_mode then return end
+
+    for i = #bounty_targets, 1, -1 do
+        local b = bounty_targets[i]
+        if ENTITY.DOES_ENTITY_EXIST(b.ped) then
+            if ENTITY.IS_ENTITY_DEAD(b.ped) and b.alive then
+                b.alive = false
+                add_rank_points(b.reward)
+                remove_blip(b.blip)
+                radio_message(b.name .. " " .. T("eliminated!") .. " +" .. b.reward .. " " .. T("pts"))
+                AUDIO.PLAY_SOUND_FRONTEND(-1, "MEDAL_UP", "HUD_MINI_GAME_SOUNDSET", true)
+
+                local ped_ref = b.ped
+                table.remove(bounty_targets, i)
+
+                util.create_thread(function()
+                    util.yield(3000)
+                    safe_delete(ped_ref)
+                end)
+            end
+        else
+            remove_blip(b.blip)
+            table.remove(bounty_targets, i)
+        end
+    end
+end)
+
+-- Backup unit cleanup
+util.create_tick_handler(function()
+    if not police_mode then return end
+
+    for i = #backup_units, 1, -1 do
+        local b = backup_units[i]
+        if not ENTITY.DOES_ENTITY_EXIST(b.ped) or ENTITY.IS_ENTITY_DEAD(b.ped) then
+            safe_delete(b.ped)
+            remove_blip(b.blip)
+            table.remove(backup_units, i)
+        end
+    end
+end)
+
+-- Backup units engage criminals
+util.create_tick_handler(function()
+    if not police_mode or #backup_units == 0 then return end
+
+    for _, b in ipairs(backup_units) do
+        if ENTITY.DOES_ENTITY_EXIST(b.ped) and not ENTITY.IS_ENTITY_DEAD(b.ped) then
+            if PED.GET_SCRIPT_TASK_STATUS(b.ped, 0x2E85A751) == 7 then
+                -- Find nearest alive criminal to fight
+                local nearest_crim = nil
+                local nearest_dist = 999999.0
+                local backup_pos = ENTITY.GET_ENTITY_COORDS(b.ped, true)
+                for _, c in ipairs(criminals) do
+                    if ENTITY.DOES_ENTITY_EXIST(c.ped) and c.alive and not c.arrested and not ENTITY.IS_ENTITY_DEAD(c.ped) then
+                        local dist = backup_pos:distance(ENTITY.GET_ENTITY_COORDS(c.ped, true))
+                        if dist < nearest_dist then
+                            nearest_dist = dist
+                            nearest_crim = c.ped
+                        end
+                    end
+                end
+                -- Also check bounty targets
+                for _, bt in ipairs(bounty_targets) do
+                    if ENTITY.DOES_ENTITY_EXIST(bt.ped) and bt.alive and not ENTITY.IS_ENTITY_DEAD(bt.ped) then
+                        local dist = backup_pos:distance(ENTITY.GET_ENTITY_COORDS(bt.ped, true))
+                        if dist < nearest_dist then
+                            nearest_dist = dist
+                            nearest_crim = bt.ped
+                        end
+                    end
+                end
+                if nearest_crim and nearest_dist < 80.0 then
+                    TASK.TASK_COMBAT_PED(b.ped, nearest_crim, 0, 16)
+                end
+            end
+        end
+    end
+end)
+
+-- SWAT team engage criminals
+util.create_tick_handler(function()
+    if not police_mode or #swat_team == 0 then return end
+
+    for i = #swat_team, 1, -1 do
+        local s = swat_team[i]
+        if not ENTITY.DOES_ENTITY_EXIST(s.ped) or ENTITY.IS_ENTITY_DEAD(s.ped) then
+            safe_delete(s.ped)
+            remove_blip(s.blip)
+            table.remove(swat_team, i)
+        elseif PED.GET_SCRIPT_TASK_STATUS(s.ped, 0x2E85A751) == 7 then
+            local nearest_crim = nil
+            local nearest_dist = 999999.0
+            local swat_pos = ENTITY.GET_ENTITY_COORDS(s.ped, true)
+            for _, c in ipairs(criminals) do
+                if ENTITY.DOES_ENTITY_EXIST(c.ped) and c.alive and not c.arrested and not ENTITY.IS_ENTITY_DEAD(c.ped) then
+                    local dist = swat_pos:distance(ENTITY.GET_ENTITY_COORDS(c.ped, true))
+                    if dist < nearest_dist then
+                        nearest_dist = dist
+                        nearest_crim = c.ped
+                    end
+                end
+            end
+            for _, bt in ipairs(bounty_targets) do
+                if ENTITY.DOES_ENTITY_EXIST(bt.ped) and bt.alive and not ENTITY.IS_ENTITY_DEAD(bt.ped) then
+                    local dist = swat_pos:distance(ENTITY.GET_ENTITY_COORDS(bt.ped, true))
+                    if dist < nearest_dist then
+                        nearest_dist = dist
+                        nearest_crim = bt.ped
+                    end
+                end
+            end
+            if nearest_crim and nearest_dist < 100.0 then
+                TASK.TASK_COMBAT_PED(s.ped, nearest_crim, 0, 16)
+            end
+        end
+    end
+end)
+
+-- Speed trap monitoring
+util.create_tick_handler(function()
+    if not police_mode or not speed_trap_active or not speed_trap_pos then return end
+
+    local trap_v3 = v3(speed_trap_pos.x, speed_trap_pos.y, speed_trap_pos.z)
+    local player_ped = players.user_ped()
+
+    for _, veh in ipairs(entities.get_all_vehicles_as_handles()) do
+        if ENTITY.DOES_ENTITY_EXIST(veh) and not PED.IS_PED_IN_VEHICLE(player_ped, veh, false) then
+            local veh_pos = ENTITY.GET_ENTITY_COORDS(veh, true)
+            if trap_v3:distance(veh_pos) <= 30.0 then
+                local speed_kmh = ENTITY.GET_ENTITY_SPEED(veh) * 3.6
+                if speed_kmh > speed_trap_limit then
+                    -- Slow them down
+                    local driver = VEHICLE.GET_PED_IN_VEHICLE_SEAT(veh, -1, false)
+                    if driver ~= 0 and not PED.IS_PED_A_PLAYER(driver) then
+                        NETWORK.NETWORK_REQUEST_CONTROL_OF_ENTITY(veh)
+                        VEHICLE.SET_VEHICLE_FORWARD_SPEED(veh, speed_trap_limit / 3.6 * 0.5)
+                        speed_trap_fines = speed_trap_fines + 1
+                        if speed_trap_fines % 3 == 1 then
+                            radio_message(T("Speeding detected!") .. " " .. string.format("%.0f", speed_kmh) .. " km/h | " .. T("Total fines") .. ": " .. speed_trap_fines)
+                        end
+                    end
+                end
+            end
+        end
+    end
+end)
+
+-- Prisoner transport tracking
+util.create_tick_handler(function()
+    if not police_mode or not transport_active or not transport_dest_pos then return end
+
+    local player_pos = players.get_position(players.user())
+    local dest = transport_dest_pos
+    local dist = math.sqrt((player_pos.x - dest.x)^2 + (player_pos.y - dest.y)^2 + (player_pos.z - dest.z)^2)
+
+    if dist <= 20.0 then
+        complete_transport()
+    end
+end)
+
+-- K9 auto-follow when idle
+util.create_tick_handler(function()
+    if not police_mode or not k9_dog or not ENTITY.DOES_ENTITY_EXIST(k9_dog) then return end
+
+    local dog_pos = ENTITY.GET_ENTITY_COORDS(k9_dog, true)
+    local player_pos = players.get_position(players.user())
+    local dist = player_pos:distance(dog_pos)
+
+    -- Teleport K9 if too far
+    if dist > 50.0 then
+        local fwd = ENTITY.GET_ENTITY_FORWARD_VECTOR(players.user_ped())
+        ENTITY.SET_ENTITY_COORDS(k9_dog, player_pos.x - fwd.x * 2.0, player_pos.y - fwd.y * 2.0, player_pos.z, true, false, false, true)
+    end
+end)
+
+local function toggle_siren()
+    if not patrol_vehicle or not ENTITY.DOES_ENTITY_EXIST(patrol_vehicle) then
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("No patrol vehicle."))
+        return
+    end
+
+    siren_on = not siren_on
+    VEHICLE.SET_VEHICLE_SIREN(patrol_vehicle, siren_on)
+    util.toast("[" .. T("Police Simulator") .. "] " .. (siren_on and T("Siren ON") or T("Siren OFF")))
+end
+
+util.create_tick_handler(function()
+    if not show_debug or not police_mode then return end
+
+    util.draw_debug_text("")
+    util.draw_debug_text("[ " .. T("Police Simulator") .. " ]")
+
+    local elapsed = os.time() - shift_start_time
+    util.draw_debug_text(T("Duty Time") .. ": " .. string.format("%02d:%02d", math.floor(elapsed / 60), elapsed % 60))
+    util.draw_debug_text(T("Rank") .. ": " .. get_rank_name() .. " | " .. T("Points") .. ": " .. rank_points)
+    util.draw_debug_text(T("Arrests") .. ": " .. total_arrests .. " | " .. T("Kills") .. ": " .. total_kills)
+    util.draw_debug_text(T("Crimes Detected") .. ": " .. total_crimes_detected .. T("cases"))
+    if #backup_units > 0 then
+        util.draw_debug_text(T("Backup") .. ": " .. #backup_units .. "/" .. max_backup)
+    end
+    if #bounty_targets > 0 then
+        util.draw_debug_text(T("Bounties") .. ": " .. #bounty_targets)
+    end
+    if #swat_team > 0 then
+        util.draw_debug_text(T("SWAT") .. ": " .. #swat_team .. "/" .. max_swat)
+    end
+    if k9_dog and ENTITY.DOES_ENTITY_EXIST(k9_dog) then
+        util.draw_debug_text(T("K9") .. ": " .. T("Active"))
+    end
+    if speed_trap_active then
+        util.draw_debug_text(T("Speed Trap") .. ": " .. T("Active") .. " (" .. speed_trap_fines .. " " .. T("fines") .. ")")
+    end
+    if transport_active then
+        local dest = transport_dest_pos
+        local player_pos = players.get_position(players.user())
+        local tdist = math.sqrt((player_pos.x - dest.x)^2 + (player_pos.y - dest.y)^2)
+        util.draw_debug_text(T("Transport") .. ": " .. transport_prisoners .. " " .. T("prisoners") .. " | " .. string.format("%.0fm", tdist))
+    end
+    if undercover_mode then
+        util.draw_debug_text(T("Undercover") .. ": " .. T("Active"))
+    end
+
+    local active_count = 0
+    for _, c in ipairs(criminals) do
+        if c.alive and not c.arrested and ENTITY.DOES_ENTITY_EXIST(c.ped) and not ENTITY.IS_ENTITY_DEAD(c.ped) then
+            active_count = active_count + 1
+        end
+    end
+    util.draw_debug_text(T("Active Criminals") .. ": " .. active_count .. " / " .. max_criminals)
+
+    if chase_active and chase_target and ENTITY.DOES_ENTITY_EXIST(chase_target.ped) then
+        local player_pos = players.get_position(players.user())
+        local crim_pos = ENTITY.GET_ENTITY_COORDS(chase_target.ped, true)
+        util.draw_debug_text(T("Chasing! Distance") .. ": " .. string.format("%.0fm", player_pos:distance(crim_pos)))
+    end
+
+    if wave_active then
+        util.draw_debug_text(T("Wave") .. " " .. wave_number .. " " .. T("Wave in progress"))
+    end
+
+    local closest, closest_dist = get_closest_criminal()
+    if closest then
+        util.draw_debug_text(T("Nearest Criminal") .. ": " .. string.format("%.0fm", closest_dist))
+    end
+
+    util.draw_debug_text("")
+end)
+
+local ROOT = menu.my_root()
+local ref
+
+ref = menu.divider(ROOT, "[ " .. T("Police Simulator") .. " v" .. SCRIPT_VERSION .. " ]")
+reg(ref, ROOT, function() return "[ " .. T("Police Simulator") .. " v" .. SCRIPT_VERSION .. " ]" end)
+
+-- Show startup banner
+show_banner("Banner.png", 3.0)
+log_init()
+
+local LANG_MENU = menu.list(ROOT, T("Language"), {"pslang"}, T("Select language."))
+reg(LANG_MENU, ROOT, function() return T("Language") end, function() return T("Select language.") end)
+
+for _, lf in ipairs(LANG_FILES) do
+    menu.action(LANG_MENU, lf.name, {}, "", function()
+        if not filesystem.exists(lf.file) then
+            util.toast("[" .. T("Police Simulator") .. "] Language file not found: " .. lf.name)
+            return
+        end
+        write_setting("Language", lf.name)
+        current_lang = lf.name
+        load_language(lf.file)
+        refresh_menus()
+        log_event("SYSTEM", "Language changed to: " .. lf.name)
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("Language") .. ": " .. lf.name)
+    end)
+end
+
+local DUTY_MENU = menu.list(ROOT, T("Duty"), {"psduty"}, T("Start or end police duty."))
+reg(DUTY_MENU, ROOT, function() return T("Duty") end, function() return T("Start or end police duty.") end)
+
+ref = menu.action(DUTY_MENU, T("Start Duty"), {"psstart"}, T("Change into police uniform and receive weapons."), function()
+    start_police_mode()
+end)
+reg(ref, DUTY_MENU, function() return T("Start Duty") end, function() return T("Change into police uniform and receive weapons.") end)
+
+ref = menu.action(DUTY_MENU, T("End Duty"), {"psstop"}, T("End police mode and return to original character."), function()
+    stop_police_mode()
+end)
+reg(ref, DUTY_MENU, function() return T("End Duty") end, function() return T("End police mode and return to original character.") end)
+
+ref = menu.divider(DUTY_MENU, T("Select Uniform"))
+reg(ref, DUTY_MENU, function() return T("Select Uniform") end)
+
+for i, model in ipairs(POLICE_MODELS) do
+    ref = menu.action(DUTY_MENU, T(model.name), {}, T("Uniform") .. ": " .. T(model.name), function()
+        selected_model_idx = i
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("Uniform selected") .. ": " .. T(model.name))
+        if police_mode then
+            local hash = util.joaat(model.hash)
+            util.request_model(hash)
+
+            local cur_ped = players.user_ped()
+            local cur_pos = players.get_position(players.user())
+            local cur_heading = ENTITY.GET_ENTITY_HEADING(cur_ped)
+
+            local new_ped = PED.CREATE_PED(4, hash, cur_pos.x, cur_pos.y, cur_pos.z, cur_heading, true, false)
+            if new_ped ~= 0 then
+                ENTITY.SET_ENTITY_AS_MISSION_ENTITY(new_ped, true, true)
+                PED.SET_PED_DEFAULT_COMPONENT_VARIATION(new_ped)
+                PED.SET_PED_CONFIG_FLAG(new_ped, 35, false)
+                PLAYER.CHANGE_PLAYER_PED(players.user(), new_ped, false, false)
+                util.yield(500)
+
+                if cur_ped ~= players.user_ped() and ENTITY.DOES_ENTITY_EXIST(cur_ped) then
+                    safe_delete(cur_ped)
+                end
+
+                give_police_weapons(players.user_ped())
+            end
+            STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(hash)
+        end
+    end)
+    reg(ref, DUTY_MENU, function() return T(model.name) end, function() return T("Uniform") .. ": " .. T(model.name) end)
+end
+
+local VEHICLE_MENU = menu.list(ROOT, T("Patrol Vehicle"), {"psvehicle"}, T("Spawn and manage patrol vehicles."))
+reg(VEHICLE_MENU, ROOT, function() return T("Patrol Vehicle") end, function() return T("Spawn and manage patrol vehicles.") end)
+
+ref = menu.action(VEHICLE_MENU, T("Spawn Patrol Vehicle"), {"psspawn"}, T("Spawn selected patrol vehicle."), function()
+    spawn_patrol_vehicle()
+end)
+reg(ref, VEHICLE_MENU, function() return T("Spawn Patrol Vehicle") end, function() return T("Spawn selected patrol vehicle.") end)
+
+ref = menu.action(VEHICLE_MENU, T("Enter Patrol Vehicle"), {"psenter"}, T("Enter the patrol vehicle."), function()
+    if not patrol_vehicle or not ENTITY.DOES_ENTITY_EXIST(patrol_vehicle) then
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("No patrol vehicle."))
+        return
+    end
+    PED.SET_PED_INTO_VEHICLE(players.user_ped(), patrol_vehicle, -1)
+end)
+reg(ref, VEHICLE_MENU, function() return T("Enter Patrol Vehicle") end, function() return T("Enter the patrol vehicle.") end)
+
+ref = menu.action(VEHICLE_MENU, T("Toggle Siren"), {"pssiren"}, T("Toggle patrol vehicle siren."), function()
+    toggle_siren()
+end)
+reg(ref, VEHICLE_MENU, function() return T("Toggle Siren") end, function() return T("Toggle patrol vehicle siren.") end)
+
+ref = menu.action(VEHICLE_MENU, T("Repair Patrol Vehicle"), {"psrepair"}, T("Repair the patrol vehicle."), function()
+    if not patrol_vehicle or not ENTITY.DOES_ENTITY_EXIST(patrol_vehicle) then
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("No vehicle to repair."))
+        return
+    end
+    VEHICLE.SET_VEHICLE_FIXED(patrol_vehicle)
+    VEHICLE.SET_VEHICLE_DIRT_LEVEL(patrol_vehicle, 0.0)
+    util.toast("[" .. T("Police Simulator") .. "] " .. T("Patrol vehicle repaired!"))
+end)
+reg(ref, VEHICLE_MENU, function() return T("Repair Patrol Vehicle") end, function() return T("Repair the patrol vehicle.") end)
+
+ref = menu.action(VEHICLE_MENU, T("Delete Patrol Vehicle"), {"psdelete"}, T("Delete current patrol vehicle."), function()
+    if patrol_vehicle then
+        if PED.IS_PED_IN_VEHICLE(players.user_ped(), patrol_vehicle, false) then
+            local pos = players.get_position(players.user())
+            TASK.CLEAR_PED_TASKS_IMMEDIATELY(players.user_ped())
+            util.yield(100)
+            ENTITY.SET_ENTITY_COORDS(players.user_ped(), pos.x + 3, pos.y + 3, pos.z + 0.5, true, false, false, true)
+        end
+        safe_delete(patrol_partner)
+        patrol_partner = nil
+        safe_delete(patrol_vehicle)
+        patrol_vehicle = nil
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("Patrol vehicle deleted"))
+    end
+end)
+reg(ref, VEHICLE_MENU, function() return T("Delete Patrol Vehicle") end, function() return T("Delete current patrol vehicle.") end)
+
+ref = menu.divider(VEHICLE_MENU, T("Select Vehicle"))
+reg(ref, VEHICLE_MENU, function() return T("Select Vehicle") end)
+
+for i, veh in ipairs(PATROL_VEHICLES) do
+    ref = menu.action(VEHICLE_MENU, T(veh.name), {}, T("Patrol Vehicle") .. ": " .. T(veh.name), function()
+        selected_vehicle_idx = i
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("Vehicle selected") .. ": " .. T(veh.name))
+    end)
+    reg(ref, VEHICLE_MENU, function() return T(veh.name) end, function() return T("Patrol Vehicle") .. ": " .. T(veh.name) end)
+end
+
+local CRIME_MENU = menu.list(ROOT, T("Crime Response"), {"pscrime"}, T("Handle crime events."))
+reg(CRIME_MENU, ROOT, function() return T("Crime Response") end, function() return T("Handle crime events.") end)
+
+ref = menu.action(CRIME_MENU, T("Trigger Crime Event"), {"pscrimevent"}, T("Trigger a random crime event."), function()
+    if not police_mode then
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
+        return
+    end
+    generate_crime_event()
+end)
+reg(ref, CRIME_MENU, function() return T("Trigger Crime Event") end, function() return T("Trigger a random crime event.") end)
+
+ref = menu.action(CRIME_MENU, T("Arrest Nearest Criminal"), {"psarrest"}, T("Arrest the nearest criminal."), function()
+    if not police_mode then
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
+        return
+    end
+    local closest = get_closest_criminal()
+    if not closest then
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("No criminals nearby."))
+        return
+    end
+    arrest_criminal(closest)
+end)
+reg(ref, CRIME_MENU, function() return T("Arrest Nearest Criminal") end, function() return T("Arrest the nearest criminal.") end)
+
+ref = menu.action(CRIME_MENU, T("Chase Nearest Criminal"), {"pschase"}, T("Chase the nearest criminal."), function()
+    if not police_mode then
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
+        return
+    end
+    local closest = get_closest_criminal()
+    if not closest then
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("No criminals to chase."))
+        return
+    end
+    start_chase(closest)
+end)
+reg(ref, CRIME_MENU, function() return T("Chase Nearest Criminal") end, function() return T("Chase the nearest criminal.") end)
+
+ref = menu.action(CRIME_MENU, T("Stop Chase"), {"pschasestop"}, T("Stop current chase."), function()
+    stop_chase()
+end)
+reg(ref, CRIME_MENU, function() return T("Stop Chase") end, function() return T("Stop current chase.") end)
+
+ref = menu.action(CRIME_MENU, T("Remove All Criminals"), {"psclearcrim"}, T("Remove all criminals."), function()
+    for _, c in ipairs(criminals) do
+        safe_delete(c.ped)
+        safe_delete(c.vehicle)
+        remove_blip(c.blip)
+    end
+    criminals = {}
+    chase_active = false
+    chase_target = nil
+    util.toast("[" .. T("Police Simulator") .. "] " .. T("All criminals removed"))
+end)
+reg(ref, CRIME_MENU, function() return T("Remove All Criminals") end, function() return T("Remove all criminals.") end)
+
+local WAVE_MENU = menu.list(ROOT, T("Wave Mode"), {"pswave"}, T("Respond to continuous crime waves."))
+reg(WAVE_MENU, ROOT, function() return T("Wave Mode") end, function() return T("Respond to continuous crime waves.") end)
+
+ref = menu.action(WAVE_MENU, T("Start Wave"), {"pswavestart"}, T("Start continuous crime waves.") .. "\n" .. T("Criminal count increases each wave."), function()
+    if not police_mode then
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
+        return
+    end
+    start_wave_mode()
+end)
+reg(ref, WAVE_MENU, function() return T("Start Wave") end, function() return T("Start continuous crime waves.") .. "\n" .. T("Criminal count increases each wave.") end)
+
+ref = menu.action(WAVE_MENU, T("Stop Wave"), {"pswavestop"}, T("Stop wave mode."), function()
+    stop_wave_mode()
+end)
+reg(ref, WAVE_MENU, function() return T("Stop Wave") end, function() return T("Stop wave mode.") end)
+
+ref = menu.slider(WAVE_MENU, T("Max Criminals"), {"psmaxcrim"}, T("Maximum simultaneous criminals."), 1, 15, 5, 1, function(val)
+    max_criminals = val
+end)
+reg(ref, WAVE_MENU, function() return T("Max Criminals") end, function() return T("Maximum simultaneous criminals.") end)
+
+-- ==================== TACTICAL MENU ====================
+
+local TACTICAL_MENU = menu.list(ROOT, T("Tactical"), {"pstactical"}, T("Tactical equipment and actions."))
+reg(TACTICAL_MENU, ROOT, function() return T("Tactical") end, function() return T("Tactical equipment and actions.") end)
+
+ref = menu.action(TACTICAL_MENU, T("Deploy Spike Strip"), {"psspike"}, T("Deploy a spike strip to burst tires."), function()
+    deploy_spike_strip()
+end)
+reg(ref, TACTICAL_MENU, function() return T("Deploy Spike Strip") end, function() return T("Deploy a spike strip to burst tires.") end)
+
+ref = menu.action(TACTICAL_MENU, T("Clear Spike Strips"), {"psclearspike"}, T("Remove all deployed spike strips."), function()
+    clear_spike_strips()
+end)
+reg(ref, TACTICAL_MENU, function() return T("Clear Spike Strips") end, function() return T("Remove all deployed spike strips.") end)
+
+ref = menu.action(TACTICAL_MENU, T("Deploy Roadblock"), {"psroadblock"}, T("Set up a police roadblock ahead."), function()
+    deploy_roadblock()
+end)
+reg(ref, TACTICAL_MENU, function() return T("Deploy Roadblock") end, function() return T("Set up a police roadblock ahead.") end)
+
+ref = menu.action(TACTICAL_MENU, T("Clear Roadblocks"), {"psclearblock"}, T("Remove all roadblocks."), function()
+    clear_roadblocks()
+end)
+reg(ref, TACTICAL_MENU, function() return T("Clear Roadblocks") end, function() return T("Remove all roadblocks.") end)
+
+ref = menu.action(TACTICAL_MENU, T("Flashbang"), {"psflash"}, T("Throw flashbang to stun nearby criminals."), function()
+    throw_flashbang()
+end)
+reg(ref, TACTICAL_MENU, function() return T("Flashbang") end, function() return T("Throw flashbang to stun nearby criminals.") end)
+
+ref = menu.action(TACTICAL_MENU, T("Warning Shot"), {"pswarning"}, T("Fire warning shot to intimidate criminals."), function()
+    fire_warning_shot()
+end)
+reg(ref, TACTICAL_MENU, function() return T("Warning Shot") end, function() return T("Fire warning shot to intimidate criminals.") end)
+
+ref = menu.action(TACTICAL_MENU, T("Smoke Grenade"), {"pssmoke"}, T("Deploy smoke grenade to blind criminals."), function()
+    throw_smoke_grenade()
+end)
+reg(ref, TACTICAL_MENU, function() return T("Smoke Grenade") end, function() return T("Deploy smoke grenade to blind criminals.") end)
+
+-- ==================== BACKUP & SUPPORT MENU ====================
+
+local BACKUP_MENU = menu.list(ROOT, T("Backup & Support"), {"psbackup"}, T("Request backup and air support."))
+reg(BACKUP_MENU, ROOT, function() return T("Backup & Support") end, function() return T("Request backup and air support.") end)
+
+ref = menu.action(BACKUP_MENU, T("Request Backup"), {"psreqbackup"}, T("Call in a police backup unit."), function()
+    request_backup()
+end)
+reg(ref, BACKUP_MENU, function() return T("Request Backup") end, function() return T("Call in a police backup unit.") end)
+
+ref = menu.action(BACKUP_MENU, T("Dismiss Backup"), {"psdismissbackup"}, T("Dismiss all backup units."), function()
+    dismiss_backup()
+end)
+reg(ref, BACKUP_MENU, function() return T("Dismiss Backup") end, function() return T("Dismiss all backup units.") end)
+
+ref = menu.slider(BACKUP_MENU, T("Max Backup"), {"psmaxbackup"}, T("Maximum backup units."), 1, 8, 4, 1, function(val)
+    max_backup = val
+end)
+reg(ref, BACKUP_MENU, function() return T("Max Backup") end, function() return T("Maximum backup units.") end)
+
+ref = menu.divider(BACKUP_MENU, T("Air Support"))
+reg(ref, BACKUP_MENU, function() return T("Air Support") end)
+
+ref = menu.action(BACKUP_MENU, T("Deploy Helicopter"), {"psheli"}, T("Call in police helicopter for air support."), function()
+    deploy_helicopter()
+end)
+reg(ref, BACKUP_MENU, function() return T("Deploy Helicopter") end, function() return T("Call in police helicopter for air support.") end)
+
+ref = menu.action(BACKUP_MENU, T("Dismiss Helicopter"), {"psdismissheli"}, T("Dismiss the police helicopter."), function()
+    dismiss_helicopter()
+end)
+reg(ref, BACKUP_MENU, function() return T("Dismiss Helicopter") end, function() return T("Dismiss the police helicopter.") end)
+
+-- ==================== TRAFFIC STOP MENU ====================
+
+local TRAFFIC_MENU = menu.list(ROOT, T("Traffic Stop"), {"pstraffic"}, T("Perform traffic stops on vehicles."))
+reg(TRAFFIC_MENU, ROOT, function() return T("Traffic Stop") end, function() return T("Perform traffic stops on vehicles.") end)
+
+ref = menu.action(TRAFFIC_MENU, T("Initiate Traffic Stop"), {"pspullover"}, T("Pull over the vehicle ahead."), function()
+    initiate_traffic_stop()
+end)
+reg(ref, TRAFFIC_MENU, function() return T("Initiate Traffic Stop") end, function() return T("Pull over the vehicle ahead.") end)
+
+ref = menu.action(TRAFFIC_MENU, T("Order Driver Out"), {"psdriverout"}, T("Order the driver out of the vehicle."), function()
+    order_driver_out()
+end)
+reg(ref, TRAFFIC_MENU, function() return T("Order Driver Out") end, function() return T("Order the driver out of the vehicle.") end)
+
+ref = menu.action(TRAFFIC_MENU, T("End Traffic Stop"), {"psendstop"}, T("Release the vehicle."), function()
+    end_traffic_stop()
+end)
+reg(ref, TRAFFIC_MENU, function() return T("End Traffic Stop") end, function() return T("Release the vehicle.") end)
+
+-- ==================== BOUNTY BOARD MENU ====================
+
+local BOUNTY_MENU = menu.list(ROOT, T("Bounty Board"), {"psbounty"}, T("Track and eliminate high-value targets."))
+reg(BOUNTY_MENU, ROOT, function() return T("Bounty Board") end, function() return T("Track and eliminate high-value targets.") end)
+
+ref = menu.action(BOUNTY_MENU, T("Generate Bounty"), {"psnewbounty"}, T("Create a new most-wanted target."), function()
+    generate_bounty()
+end)
+reg(ref, BOUNTY_MENU, function() return T("Generate Bounty") end, function() return T("Create a new most-wanted target.") end)
+
+ref = menu.action(BOUNTY_MENU, T("Clear All Bounties"), {"psclearbounty"}, T("Remove all bounty targets."), function()
+    clear_bounties()
+end)
+reg(ref, BOUNTY_MENU, function() return T("Clear All Bounties") end, function() return T("Remove all bounty targets.") end)
+
+ref = menu.slider(BOUNTY_MENU, T("Max Bounties"), {"psmaxbounty"}, T("Maximum bounty targets."), 1, 10, 3, 1, function(val)
+    max_bounties = val
+end)
+reg(ref, BOUNTY_MENU, function() return T("Max Bounties") end, function() return T("Maximum bounty targets.") end)
+
+ref = menu.action(BOUNTY_MENU, T("View Rank"), {"psrank"}, T("View current rank and points."), function()
+    local next_name, pts_needed = get_next_rank_info()
+    local msg = "[" .. T("Police Simulator") .. "] " .. T("Rank") .. "\n\n" ..
+                T("Current Rank") .. ": " .. get_rank_name() .. "\n" ..
+                T("Points") .. ": " .. rank_points
+    if next_name then
+        msg = msg .. "\n" .. T("Next Rank") .. ": " .. next_name .. " (" .. pts_needed .. " " .. T("pts needed") .. ")"
+    else
+        msg = msg .. "\n" .. T("Maximum rank achieved!")
+    end
+    util.toast(msg)
+end)
+reg(ref, BOUNTY_MENU, function() return T("View Rank") end, function() return T("View current rank and points.") end)
+
+-- ==================== K9 UNIT MENU ====================
+
+local K9_MENU = menu.list(ROOT, T("K9 Unit"), {"psk9"}, T("Police dog companion."))
+reg(K9_MENU, ROOT, function() return T("K9 Unit") end, function() return T("Police dog companion.") end)
+
+ref = menu.action(K9_MENU, T("Deploy K9"), {"psk9deploy"}, T("Deploy police K9 unit."), function()
+    deploy_k9()
+end)
+reg(ref, K9_MENU, function() return T("Deploy K9") end, function() return T("Deploy police K9 unit.") end)
+
+ref = menu.action(K9_MENU, T("Dismiss K9"), {"psk9dismiss"}, T("Dismiss the K9 unit."), function()
+    dismiss_k9()
+end)
+reg(ref, K9_MENU, function() return T("Dismiss K9") end, function() return T("Dismiss the K9 unit.") end)
+
+ref = menu.action(K9_MENU, T("K9 Attack"), {"psk9attack"}, T("Command K9 to attack nearest criminal."), function()
+    k9_attack_nearest()
+end)
+reg(ref, K9_MENU, function() return T("K9 Attack") end, function() return T("Command K9 to attack nearest criminal.") end)
+
+ref = menu.action(K9_MENU, T("K9 Follow"), {"psk9follow"}, T("Command K9 to follow you."), function()
+    k9_follow()
+end)
+reg(ref, K9_MENU, function() return T("K9 Follow") end, function() return T("Command K9 to follow you.") end)
+
+-- ==================== SWAT MENU ====================
+
+local SWAT_MENU = menu.list(ROOT, T("SWAT Raid"), {"psswat"}, T("Deploy SWAT tactical team."))
+reg(SWAT_MENU, ROOT, function() return T("SWAT Raid") end, function() return T("Deploy SWAT tactical team.") end)
+
+ref = menu.action(SWAT_MENU, T("Call SWAT"), {"pscallswat"}, T("Deploy SWAT team with tactical vehicle."), function()
+    call_swat()
+end)
+reg(ref, SWAT_MENU, function() return T("Call SWAT") end, function() return T("Deploy SWAT team with tactical vehicle.") end)
+
+ref = menu.action(SWAT_MENU, T("Dismiss SWAT"), {"psdismissswat"}, T("Dismiss the SWAT team."), function()
+    dismiss_swat()
+end)
+reg(ref, SWAT_MENU, function() return T("Dismiss SWAT") end, function() return T("Dismiss the SWAT team.") end)
+
+ref = menu.slider(SWAT_MENU, T("Max SWAT"), {"psmaxswat"}, T("Maximum SWAT operators."), 2, 10, 6, 1, function(val)
+    max_swat = val
+end)
+reg(ref, SWAT_MENU, function() return T("Max SWAT") end, function() return T("Maximum SWAT operators.") end)
+
+-- ==================== UNDERCOVER MENU ====================
+
+local UNDERCOVER_MENU = menu.list(ROOT, T("Undercover"), {"psundercover"}, T("Undercover operations."))
+reg(UNDERCOVER_MENU, ROOT, function() return T("Undercover") end, function() return T("Undercover operations.") end)
+
+ref = menu.action(UNDERCOVER_MENU, T("Toggle Undercover"), {"psundercovermode"}, T("Switch between uniform and civilian clothes."), function()
+    toggle_undercover()
+end)
+reg(ref, UNDERCOVER_MENU, function() return T("Toggle Undercover") end, function() return T("Switch between uniform and civilian clothes.") end)
+
+ref = menu.action(UNDERCOVER_MENU, T("Spawn Undercover Vehicle"), {"psundercoverveh"}, T("Spawn a random civilian vehicle."), function()
+    spawn_undercover_vehicle()
+end)
+reg(ref, UNDERCOVER_MENU, function() return T("Spawn Undercover Vehicle") end, function() return T("Spawn a random civilian vehicle.") end)
+
+-- ==================== SPEED TRAP MENU ====================
+
+local SPEEDTRAP_MENU = menu.list(ROOT, T("Speed Trap"), {"psspeedtrap"}, T("Set up speed enforcement."))
+reg(SPEEDTRAP_MENU, ROOT, function() return T("Speed Trap") end, function() return T("Set up speed enforcement.") end)
+
+ref = menu.action(SPEEDTRAP_MENU, T("Toggle Speed Trap"), {"psspeedtrapset"}, T("Activate or deactivate speed trap at current position."), function()
+    toggle_speed_trap()
+end)
+reg(ref, SPEEDTRAP_MENU, function() return T("Toggle Speed Trap") end, function() return T("Activate or deactivate speed trap at current position.") end)
+
+ref = menu.slider(SPEEDTRAP_MENU, T("Speed Limit (km/h)"), {"psspeedlimit"}, T("Speed limit for the trap."), 30, 200, 80, 10, function(val)
+    speed_trap_limit = val * 1.0
+end)
+reg(ref, SPEEDTRAP_MENU, function() return T("Speed Limit (km/h)") end, function() return T("Speed limit for the trap.") end)
+
+-- ==================== PRISONER TRANSPORT MENU ====================
+
+local TRANSPORT_MENU = menu.list(ROOT, T("Prisoner Transport"), {"pstransport"}, T("Transport arrested prisoners for bonus points."))
+reg(TRANSPORT_MENU, ROOT, function() return T("Prisoner Transport") end, function() return T("Transport arrested prisoners for bonus points.") end)
+
+ref = menu.action(TRANSPORT_MENU, T("Start Transport"), {"pstransportstart"}, T("Load prisoners and start transport mission."), function()
+    start_prisoner_transport()
+end)
+reg(ref, TRANSPORT_MENU, function() return T("Start Transport") end, function() return T("Load prisoners and start transport mission.") end)
+
+ref = menu.action(TRANSPORT_MENU, T("Cancel Transport"), {"pstransportcancel"}, T("Cancel current transport mission."), function()
+    cancel_transport()
+end)
+reg(ref, TRANSPORT_MENU, function() return T("Cancel Transport") end, function() return T("Cancel current transport mission.") end)
+
+-- ==================== SETTINGS ====================
+
+local SETTINGS_MENU = menu.list(ROOT, T("Settings"), {"pssettings"}, T("Change Police Simulator settings."))
+reg(SETTINGS_MENU, ROOT, function() return T("Settings") end, function() return T("Change Police Simulator settings.") end)
+
+ref = menu.divider(SETTINGS_MENU, T("Crime Settings"))
+reg(ref, SETTINGS_MENU, function() return T("Crime Settings") end)
+
+ref = menu.list(SETTINGS_MENU, T("Difficulty Preset"), {"psdifficulty"}, T("Set overall difficulty."))
+reg(ref, SETTINGS_MENU, function() return T("Difficulty Preset") end, function() return T("Set overall difficulty.") end)
+local DIFF_MENU = ref
+
+for i, preset in ipairs(DIFFICULTY_PRESETS) do
+    ref = menu.action(DIFF_MENU, T(preset.name), {}, T("Accuracy") .. ": " .. preset.accuracy .. "% | " .. T("Health") .. ": x" .. preset.health, function()
+        apply_difficulty(i)
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("Difficulty") .. ": " .. T(preset.name))
+    end)
+    reg(ref, DIFF_MENU, function() return T(DIFFICULTY_PRESETS[i].name) end, function() return T("Accuracy") .. ": " .. DIFFICULTY_PRESETS[i].accuracy .. "% | " .. T("Health") .. ": x" .. DIFFICULTY_PRESETS[i].health end)
+end
+
+ref = menu.slider(SETTINGS_MENU, T("Crime Detection Range (m)"), {"pscrimerange"}, T("Crime event spawn range."), 50, 500, 150, 10, function(val)
+    crime_radius = val * 1.0
+end)
+reg(ref, SETTINGS_MENU, function() return T("Crime Detection Range (m)") end, function() return T("Crime event spawn range.") end)
+
+ref = menu.slider(SETTINGS_MENU, T("Crime Interval (sec)"), {"pscrimeinterval"}, T("Auto crime event interval."), 10, 120, 30, 5, function(val)
+    crime_interval = val
+end)
+reg(ref, SETTINGS_MENU, function() return T("Crime Interval (sec)") end, function() return T("Auto crime event interval.") end)
+
+ref = menu.slider_float(SETTINGS_MENU, T("Arrest Range (m)"), {"psarrestrange"}, T("Criminal arrest distance."), 100, 1000, 300, 50, function(val)
+    arrest_range = val / 100.0
+end)
+reg(ref, SETTINGS_MENU, function() return T("Arrest Range (m)") end, function() return T("Criminal arrest distance.") end)
+
+ref = menu.divider(SETTINGS_MENU, T("Criminal Settings"))
+reg(ref, SETTINGS_MENU, function() return T("Criminal Settings") end)
+
+ref = menu.slider(SETTINGS_MENU, T("Criminal Accuracy (%)"), {"pscrimaccuracy"}, T("How accurate criminals shoot. Higher = harder."), 0, 100, 30, 5, function(val)
+    criminal_accuracy = val
+end)
+reg(ref, SETTINGS_MENU, function() return T("Criminal Accuracy (%)") end, function() return T("How accurate criminals shoot. Higher = harder.") end)
+
+ref = menu.slider(SETTINGS_MENU, T("Criminal Health Multiplier"), {"pscrimhealth"}, T("Criminal health multiplier. 1x = normal, 5x = very tough."), 1, 5, 1, 1, function(val)
+    criminal_health_mult = val * 1.0
+end)
+reg(ref, SETTINGS_MENU, function() return T("Criminal Health Multiplier") end, function() return T("Criminal health multiplier. 1x = normal, 5x = very tough.") end)
+
+ref = menu.slider(SETTINGS_MENU, T("Criminal Flee Chance (%)"), {"pscrimflee"}, T("Chance that criminals will flee instead of fight."), 0, 100, 30, 5, function(val)
+    criminal_flee_chance = val
+end)
+reg(ref, SETTINGS_MENU, function() return T("Criminal Flee Chance (%)") end, function() return T("Chance that criminals will flee instead of fight.") end)
+
+ref = menu.slider(SETTINGS_MENU, T("Criminal Vehicle Chance (%)"), {"pscrimveh"}, T("Chance that criminals will have a vehicle."), 0, 100, 50, 5, function(val)
+    criminal_vehicle_chance = val
+end)
+reg(ref, SETTINGS_MENU, function() return T("Criminal Vehicle Chance (%)") end, function() return T("Chance that criminals will have a vehicle.") end)
+
+ref = menu.divider(SETTINGS_MENU, T("Player Settings"))
+reg(ref, SETTINGS_MENU, function() return T("Player Settings") end)
+
+ref = menu.toggle(SETTINGS_MENU, T("Player Invincible"), {"psinvincible"}, T("Make player invincible during duty."), function(on)
+    player_invincible = on
+    if police_mode then
+        menu.set_value(godmode_ref, on)
+    end
+end, false)
+reg(ref, SETTINGS_MENU, function() return T("Player Invincible") end, function() return T("Make player invincible during duty.") end)
+
+ref = menu.toggle(SETTINGS_MENU, T("Auto Heal"), {"psautoheal"}, T("Slowly regenerate health during duty."), function(on)
+    auto_heal = on
+end, false)
+reg(ref, SETTINGS_MENU, function() return T("Auto Heal") end, function() return T("Slowly regenerate health during duty.") end)
+
+ref = menu.toggle(SETTINGS_MENU, T("Clear Wanted Level"), {"psclearwanted"}, T("Automatically clear wanted level during duty."), function(on)
+    clear_wanted = on
+end, true)
+reg(ref, SETTINGS_MENU, function() return T("Clear Wanted Level") end, function() return T("Automatically clear wanted level during duty.") end)
+
+ref = menu.divider(SETTINGS_MENU, T("Vehicle & Partner"))
+reg(ref, SETTINGS_MENU, function() return T("Vehicle & Partner") end)
+
+ref = menu.toggle(SETTINGS_MENU, T("Vehicle Invincible"), {"psvehicleinv"}, T("Make patrol vehicle invincible."), function(on)
+    vehicle_invincible = on
+    if patrol_vehicle and ENTITY.DOES_ENTITY_EXIST(patrol_vehicle) then
+        ENTITY.SET_ENTITY_INVINCIBLE(patrol_vehicle, on)
+    end
+end, true)
+reg(ref, SETTINGS_MENU, function() return T("Vehicle Invincible") end, function() return T("Make patrol vehicle invincible.") end)
+
+ref = menu.toggle(SETTINGS_MENU, T("Partner Escort"), {"pspartner"}, T("Partner NPC joins when spawning patrol vehicle."), function(on)
+    partner_enabled = on
+end, true)
+reg(ref, SETTINGS_MENU, function() return T("Partner Escort") end, function() return T("Partner NPC joins when spawning patrol vehicle.") end)
+
+local PARTNER_WPN_MENU = menu.list(SETTINGS_MENU, T("Partner Weapon"), {"pspartnerwpn"}, T("Select partner's primary weapon."))
+reg(PARTNER_WPN_MENU, SETTINGS_MENU, function() return T("Partner Weapon") end, function() return T("Select partner's primary weapon.") end)
+
+for i, pw in ipairs(PARTNER_WEAPONS) do
+    ref = menu.action(PARTNER_WPN_MENU, T(pw.name), {}, "", function()
+        partner_weapon_idx = i
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("Partner Weapon") .. ": " .. T(pw.name))
+    end)
+    reg(ref, PARTNER_WPN_MENU, function() return T(pw.name) end)
+end
+
+ref = menu.divider(SETTINGS_MENU, T("Feature Toggles"))
+reg(ref, SETTINGS_MENU, function() return T("Feature Toggles") end)
+
+ref = menu.toggle(SETTINGS_MENU, T("Auto Crime Detection"), {"psautodetect"}, T("Periodically auto-generate crime events."), function(on)
+    auto_detect_crime = on
+end, true)
+reg(ref, SETTINGS_MENU, function() return T("Auto Crime Detection") end, function() return T("Periodically auto-generate crime events.") end)
+
+ref = menu.toggle(SETTINGS_MENU, T("Radio Alerts"), {"psradio"}, T("Show radio alerts for crime events."), function(on)
+    radio_enabled = on
+end, true)
+reg(ref, SETTINGS_MENU, function() return T("Radio Alerts") end, function() return T("Show radio alerts for crime events.") end)
+
+ref = menu.toggle(SETTINGS_MENU, T("Minimap Blips"), {"psblips"}, T("Show criminal blips on minimap."), function(on)
+    show_minimap_blips = on
+end, true)
+reg(ref, SETTINGS_MENU, function() return T("Minimap Blips") end, function() return T("Show criminal blips on minimap.") end)
+
+ref = menu.toggle(SETTINGS_MENU, T("Debug Info"), {"psdebug"}, T("Show debug info on screen."), function(on)
+    show_debug = on
+end, true)
+reg(ref, SETTINGS_MENU, function() return T("Debug Info") end, function() return T("Show debug info on screen.") end)
+
+ref = menu.action(ROOT, T("About"), {"psabout"}, T("Police Simulator info."), function()
+    util.toast(
+        "[ " .. T("Police Simulator") .. " ]\n" ..
+        T("Version") .. ": " .. SCRIPT_VERSION .. "\n" ..
+        T("Language") .. ": " .. current_lang
+    )
+end)
+reg(ref, ROOT, function() return T("About") end, function() return T("Police Simulator info.") end)
+
+ref = menu.action(ROOT, T("Duty Stats"), {"psstats"}, T("Show current duty statistics."), function()
+    local elapsed = police_mode and (os.time() - shift_start_time) or 0
+    util.toast(
+        "[" .. T("Police Simulator") .. "] " .. T("Duty Stats") .. "\n\n" ..
+        T("Status") .. ": " .. (police_mode and T("On Duty") or T("Off Duty")) .. "\n" ..
+        T("Duty time") .. ": " .. math.floor(elapsed / 60) .. T("min") .. "\n" ..
+        T("Arrests") .. ": " .. total_arrests .. T("cases") .. "\n" ..
+        T("Kills") .. ": " .. total_kills .. T("cases") .. "\n" ..
+        T("Crimes Detected") .. ": " .. total_crimes_detected .. T("cases") .. "\n" ..
+        T("Active Criminals") .. ": " .. #criminals .. T("people") .. "\n" ..
+        T("Rank") .. ": " .. get_rank_name() .. " (" .. rank_points .. " " .. T("pts") .. ")" .. "\n" ..
+        T("Backup") .. ": " .. #backup_units .. "/" .. max_backup .. "\n" ..
+        T("Bounties") .. ": " .. #bounty_targets .. "/" .. max_bounties .. "\n" ..
+        T("SWAT") .. ": " .. #swat_team .. "/" .. max_swat .. "\n" ..
+        T("K9") .. ": " .. (k9_dog and ENTITY.DOES_ENTITY_EXIST(k9_dog) and T("Active") or T("None")) .. "\n" ..
+        T("Difficulty") .. ": " .. T(DIFFICULTY_PRESETS[difficulty_level].name) .. "\n" ..
+        T("Speed Trap Fines") .. ": " .. speed_trap_fines
+    )
+end)
+reg(ref, ROOT, function() return T("Duty Stats") end, function() return T("Show current duty statistics.") end)
+
+util.on_stop(function()
+    log_event("SYSTEM", "Police Simulator stopped")
+    wave_active = false
+
+    -- Clean up tactical features
+    for _, s in ipairs(spike_strips) do
+        safe_delete(s.obj)
+        remove_blip(s.blip)
+    end
+    for _, b in ipairs(backup_units) do
+        safe_delete(b.ped)
+        remove_blip(b.blip)
+    end
+    for _, b in ipairs(bounty_targets) do
+        safe_delete(b.ped)
+        remove_blip(b.blip)
+    end
+    for _, obj in ipairs(roadblock_objects) do
+        safe_delete(obj)
+    end
+    safe_delete(heli_pilot)
+    safe_delete(police_heli)
+    heli_pilot = nil
+    police_heli = nil
+    safe_delete(k9_dog)
+    remove_blip(k9_blip)
+    k9_dog = nil
+    k9_blip = nil
+    for _, s in ipairs(swat_team) do
+        safe_delete(s.ped)
+        remove_blip(s.blip)
+    end
+    safe_delete(swat_vehicle)
+    swat_vehicle = nil
+    speed_trap_active = false
+    remove_blip(speed_trap_blip)
+    speed_trap_blip = nil
+    safe_delete(transport_vehicle)
+    transport_vehicle = nil
+    remove_blip(transport_dest_blip)
+    transport_dest_blip = nil
+    transport_active = false
+    if traffic_stop_target and ENTITY.DOES_ENTITY_EXIST(traffic_stop_target) then
+        VEHICLE.SET_VEHICLE_INDICATOR_LIGHTS(traffic_stop_target, 0, false)
+        VEHICLE.SET_VEHICLE_INDICATOR_LIGHTS(traffic_stop_target, 1, false)
+    end
+    traffic_stop_target = nil
+    traffic_stop_active = false
+
+    for _, c in ipairs(criminals) do
+        safe_delete(c.ped)
+        safe_delete(c.vehicle)
+        remove_blip(c.blip)
+    end
+
+    safe_delete(patrol_partner)
+
+    if patrol_vehicle and ENTITY.DOES_ENTITY_EXIST(patrol_vehicle) then
+        if PED.IS_PED_IN_VEHICLE(players.user_ped(), patrol_vehicle, false) then
+            TASK.CLEAR_PED_TASKS_IMMEDIATELY(players.user_ped())
+            local pos = players.get_position(players.user())
+            ENTITY.SET_ENTITY_COORDS(players.user_ped(), pos.x + 3, pos.y + 3, pos.z + 0.5, true, false, false, true)
+            util.yield(200)
+        end
+        entities.delete_by_handle(patrol_vehicle)
+    end
+
+    if police_mode and original_player_ped and ENTITY.DOES_ENTITY_EXIST(original_player_ped) then
+        local police_ped = players.user_ped()
+        local pos = players.get_position(players.user())
+        local heading = ENTITY.GET_ENTITY_HEADING(police_ped)
+
+        ENTITY.SET_ENTITY_COORDS_NO_OFFSET(original_player_ped, pos.x, pos.y, pos.z, false, false, false)
+        ENTITY.SET_ENTITY_HEADING(original_player_ped, heading)
+        ENTITY.SET_ENTITY_VISIBLE(original_player_ped, true, false)
+        ENTITY.SET_ENTITY_COLLISION(original_player_ped, true, true)
+        ENTITY.FREEZE_ENTITY_POSITION(original_player_ped, false)
+        ENTITY.SET_ENTITY_INVINCIBLE(original_player_ped, false)
+        ENTITY.SET_ENTITY_ALPHA(original_player_ped, 255, false)
+        ENTITY.SET_ENTITY_HEALTH(original_player_ped, ENTITY.GET_ENTITY_MAX_HEALTH(original_player_ped), 0)
+
+        PLAYER.CHANGE_PLAYER_PED(players.user(), original_player_ped, false, false)
+        util.yield(500)
+
+        if police_ped ~= players.user_ped() and ENTITY.DOES_ENTITY_EXIST(police_ped) then
+            entities.delete_by_handle(police_ped)
+        end
+    end
+
+    menu.set_value(godmode_ref, original_godmode)
+    original_player_ped = nil
+    criminals = {}
+    police_mode = false
+end)
