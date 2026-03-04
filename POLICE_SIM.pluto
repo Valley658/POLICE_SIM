@@ -664,7 +664,7 @@ end
 
 local function remove_blip(blip)
     if blip and HUD.DOES_BLIP_EXIST(blip) then
-        HUD.REMOVE_BLIP(blip)
+        util.remove_blip(blip)
     end
 end
 
@@ -4024,25 +4024,25 @@ reg(ref, SETTINGS_MENU, function() return T("Arrest Range (m)") end, function() 
 ref = menu.divider(SETTINGS_MENU, T("Criminal Settings"))
 reg(ref, SETTINGS_MENU, function() return T("Criminal Settings") end)
 
-ref = menu.slider(SETTINGS_MENU, T("Criminal Accuracy (%)"), {"pscrimaccuracy"}, T("How accurate criminals shoot. Higher = harder."), 0, 100, 30, 5, function(val)
+ref = menu.slider(SETTINGS_MENU, T("Criminal Accuracy"), {"pscrimaccuracy"}, T("How accurate criminals shoot. Higher is harder."), 0, 100, 30, 5, function(val)
     criminal_accuracy = val
 end)
-reg(ref, SETTINGS_MENU, function() return T("Criminal Accuracy (%)") end, function() return T("How accurate criminals shoot. Higher = harder.") end)
+reg(ref, SETTINGS_MENU, function() return T("Criminal Accuracy") end, function() return T("How accurate criminals shoot. Higher is harder.") end)
 
-ref = menu.slider(SETTINGS_MENU, T("Criminal Health Multiplier"), {"pscrimhealth"}, T("Criminal health multiplier. 1x = normal, 5x = very tough."), 1, 5, 1, 1, function(val)
+ref = menu.slider(SETTINGS_MENU, T("Criminal Health Multiplier"), {"pscrimhealth"}, T("Criminal health multiplier. 1x is normal, 5x is very tough."), 1, 5, 1, 1, function(val)
     criminal_health_mult = val * 1.0
 end)
-reg(ref, SETTINGS_MENU, function() return T("Criminal Health Multiplier") end, function() return T("Criminal health multiplier. 1x = normal, 5x = very tough.") end)
+reg(ref, SETTINGS_MENU, function() return T("Criminal Health Multiplier") end, function() return T("Criminal health multiplier. 1x is normal, 5x is very tough.") end)
 
-ref = menu.slider(SETTINGS_MENU, T("Criminal Flee Chance (%)"), {"pscrimflee"}, T("Chance that criminals will flee instead of fight."), 0, 100, 30, 5, function(val)
+ref = menu.slider(SETTINGS_MENU, T("Criminal Flee Chance"), {"pscrimflee"}, T("Chance that criminals will flee instead of fight."), 0, 100, 30, 5, function(val)
     criminal_flee_chance = val
 end)
-reg(ref, SETTINGS_MENU, function() return T("Criminal Flee Chance (%)") end, function() return T("Chance that criminals will flee instead of fight.") end)
+reg(ref, SETTINGS_MENU, function() return T("Criminal Flee Chance") end, function() return T("Chance that criminals will flee instead of fight.") end)
 
-ref = menu.slider(SETTINGS_MENU, T("Criminal Vehicle Chance (%)"), {"pscrimveh"}, T("Chance that criminals will have a vehicle."), 0, 100, 50, 5, function(val)
+ref = menu.slider(SETTINGS_MENU, T("Criminal Vehicle Chance"), {"pscrimveh"}, T("Chance that criminals will have a vehicle."), 0, 100, 50, 5, function(val)
     criminal_vehicle_chance = val
 end)
-reg(ref, SETTINGS_MENU, function() return T("Criminal Vehicle Chance (%)") end, function() return T("Chance that criminals will have a vehicle.") end)
+reg(ref, SETTINGS_MENU, function() return T("Criminal Vehicle Chance") end, function() return T("Chance that criminals will have a vehicle.") end)
 
 ref = menu.divider(SETTINGS_MENU, T("Player Settings"))
 reg(ref, SETTINGS_MENU, function() return T("Player Settings") end)
