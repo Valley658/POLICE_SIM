@@ -73,13 +73,13 @@ Select language. = Sprache auswählen.
 
 # === Einstellungen ===
 Criminal Settings = Verbrechereinstellungen
-Criminal Accuracy (%) = Verbrechergenauigkeit (%)
-How accurate criminals shoot. Higher = harder. = Wie genau Verbrecher schießen. Höher = schwieriger.
+Criminal Accuracy = Verbrechergenauigkeit
+How accurate criminals shoot. Higher is harder. = Wie genau Verbrecher schießen. Höher = schwieriger.
 Criminal Health Multiplier = Verbrecher-Gesundheitsmult.
-Criminal health multiplier. 1x = normal, 5x = very tough. = Verbrecher-Gesundheitsmultiplikator. 1x = normal, 5x = sehr zäh.
-Criminal Flee Chance (%) = Fluchtwahrscheinlichkeit (%)
+Criminal health multiplier. 1x is normal, 5x is very tough. = Verbrecher-Gesundheitsmultiplikator. 1x = normal, 5x = sehr zäh.
+Criminal Flee Chance = Fluchtwahrscheinlichkeit
 Chance that criminals will flee instead of fight. = Wahrscheinlichkeit, dass Verbrecher fliehen statt kämpfen.
-Criminal Vehicle Chance (%) = Fahrzeugwahrscheinlichkeit (%)
+Criminal Vehicle Chance = Fahrzeugwahrscheinlichkeit
 Chance that criminals will have a vehicle. = Wahrscheinlichkeit, dass Verbrecher ein Fahrzeug haben.
 Player Settings = Spielereinstellungen
 Player Invincible = Spieler Unverwundbar
