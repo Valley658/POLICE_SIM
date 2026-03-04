@@ -1,6 +1,6 @@
 -- POLICE_SIM.pluto
 
-local SCRIPT_VERSION = "2.0.1"
+local SCRIPT_VERSION = "2.0.2"
 
 if not util then
     error("This script must be run inside the Stand environment.")
@@ -3686,6 +3686,8 @@ safe_tick_handler("debug_display", function()
 end)
 
 local ROOT = menu.my_root()
+
+do -- Block 1: Header, Language, Duty, Vehicle, Crime, Wave
 local ref
 
 ref = menu.divider(ROOT, "[ " .. T("Police Simulator") .. " v" .. SCRIPT_VERSION .. " ]")
@@ -3935,6 +3937,11 @@ ref = menu.slider(WAVE_MENU, T("Max Criminals"), {"psmaxcrim"}, T("Maximum simul
     max_criminals = val
 end)
 reg(ref, WAVE_MENU, function() return T("Max Criminals") end, function() return T("Maximum simultaneous criminals.") end)
+
+end -- Block 1
+
+do -- Block 2: Tactical, Backup, Traffic, Bounty, K9, SWAT, Undercover, Speedtrap, Transport, Emergency, DUI
+local ref
 
 -- ==================== TACTICAL MENU ====================
 
@@ -4187,6 +4194,11 @@ ref = menu.action(DUI_MENU, T("Close Checkpoint"), {"psduiclose"}, T("Close the 
     safe_call("Close DUI Checkpoint", close_dui_checkpoint)
 end)
 reg(ref, DUI_MENU, function() return T("Close Checkpoint") end, function() return T("Close the DUI checkpoint.") end)
+
+end -- Block 2
+
+do -- Block 3: Search, Escort, Boat, Settings, About, Stats
+local ref
 
 -- ==================== SUSPECT SEARCH ====================
 
@@ -4505,6 +4517,8 @@ ref = menu.action(ROOT, T("Duty Stats"), {"psstats"}, T("Show current duty stati
     )
 end)
 reg(ref, ROOT, function() return T("Duty Stats") end, function() return T("Show current duty statistics.") end)
+
+end -- Block 3
 
 util.on_stop(function()
     log_event("SYSTEM", "Police Simulator stopping")
