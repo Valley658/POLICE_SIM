@@ -884,6 +884,8 @@ local function stop_police_mode()
     -- GPS tracking cleanup
     remove_blip(gps_tracking_blip)
     gps_tracking_blip = nil
+    remove_blip(gps_tracking_entity_blip)
+    gps_tracking_entity_blip = nil
     gps_tracking_target = nil
     gps_tracking_active = false
 
@@ -1175,6 +1177,7 @@ end
 -- ==================== GPS CRIMINAL TRACKING ====================
 
 local gps_tracking_target = nil -- current tracked criminal ped handle
+local gps_tracking_entity_blip = nil -- entity blip for map marker (follows criminal)
 
 local function update_gps_tracking()
     if not police_mode then return end
@@ -1183,31 +1186,45 @@ local function update_gps_tracking()
     if not closest then
         remove_blip(gps_tracking_blip)
         gps_tracking_blip = nil
+        remove_blip(gps_tracking_entity_blip)
+        gps_tracking_entity_blip = nil
         gps_tracking_target = nil
         return
     end
 
-    -- If already tracking this criminal's entity, just ensure route is on
+    local crim_pos = ENTITY.GET_ENTITY_COORDS(closest.ped, true)
+
+    -- Same target: just update coord blip position and ensure route stays on
     if gps_tracking_target == closest.ped and gps_tracking_blip and HUD.DOES_BLIP_EXIST(gps_tracking_blip) then
+        HUD.SET_BLIP_COORDS(gps_tracking_blip, crim_pos.x, crim_pos.y, crim_pos.z)
         HUD.SET_BLIP_ROUTE(gps_tracking_blip, true)
         return
     end
 
-    -- Target changed or no blip - create entity-attached blip
+    -- Target changed - recreate blips
     remove_blip(gps_tracking_blip)
     gps_tracking_blip = nil
+    remove_blip(gps_tracking_entity_blip)
+    gps_tracking_entity_blip = nil
     gps_tracking_target = closest.ped
 
-    -- Entity blip follows the criminal in real-time
-    gps_tracking_blip = HUD.ADD_BLIP_FOR_ENTITY(closest.ped)
+    -- Coord-based blip for GPS route line (SET_BLIP_ROUTE only works with coord blips)
+    gps_tracking_blip = HUD.ADD_BLIP_FOR_COORD(crim_pos.x, crim_pos.y, crim_pos.z)
     HUD.SET_BLIP_SPRITE(gps_tracking_blip, 458) -- target marker
-    HUD.SET_BLIP_COLOUR(gps_tracking_blip, 1)   -- red
+    HUD.SET_BLIP_COLOUR(gps_tracking_blip, 38)  -- blue
     HUD.SET_BLIP_SCALE(gps_tracking_blip, 1.0)
     HUD.SET_BLIP_AS_SHORT_RANGE(gps_tracking_blip, false)
-    HUD.SET_BLIP_ROUTE(gps_tracking_blip, true)        -- GPS line on minimap
-    HUD.SET_BLIP_ROUTE_COLOUR(gps_tracking_blip, 1)    -- red route
-    HUD.SET_BLIP_FLASH_TIMER(gps_tracking_blip, 3000)
-    HUD.SET_BLIP_FLASHES(gps_tracking_blip, true)
+    HUD.SET_BLIP_ROUTE(gps_tracking_blip, true)        -- GPS route line on minimap
+    HUD.SET_BLIP_ROUTE_COLOUR(gps_tracking_blip, 38)   -- blue route line
+
+    -- Entity blip for real-time marker following (no route, just shows on map)
+    gps_tracking_entity_blip = HUD.ADD_BLIP_FOR_ENTITY(closest.ped)
+    HUD.SET_BLIP_SPRITE(gps_tracking_entity_blip, 458)
+    HUD.SET_BLIP_COLOUR(gps_tracking_entity_blip, 1)   -- red marker
+    HUD.SET_BLIP_SCALE(gps_tracking_entity_blip, 0.8)
+    HUD.SET_BLIP_AS_SHORT_RANGE(gps_tracking_entity_blip, false)
+    HUD.SET_BLIP_FLASH_TIMER(gps_tracking_entity_blip, 3000)
+    HUD.SET_BLIP_FLASHES(gps_tracking_entity_blip, true)
 end
 
 local function start_gps_tracking()
@@ -1225,12 +1242,14 @@ local function stop_gps_tracking()
     gps_tracking_active = false
     remove_blip(gps_tracking_blip)
     gps_tracking_blip = nil
+    remove_blip(gps_tracking_entity_blip)
+    gps_tracking_entity_blip = nil
     gps_tracking_target = nil
     log_event("TRACKING", "GPS criminal tracking deactivated")
     radio_message(T("GPS tracking deactivated."))
 end
 
--- GPS tracking tick handler: checks if target changed every 2 seconds
+-- GPS tracking tick handler: updates route blip position every 2 seconds
 local gps_update_timer = 0
 safe_tick_handler("gps_tracking", function()
     if not police_mode or not gps_tracking_active then return end
@@ -1242,6 +1261,8 @@ safe_tick_handler("gps_tracking", function()
             -- Target gone/dead, force re-acquire
             remove_blip(gps_tracking_blip)
             gps_tracking_blip = nil
+            remove_blip(gps_tracking_entity_blip)
+            gps_tracking_entity_blip = nil
             gps_tracking_target = nil
         end
     end
@@ -1254,6 +1275,8 @@ safe_tick_handler("gps_tracking", function()
     if not closest then
         remove_blip(gps_tracking_blip)
         gps_tracking_blip = nil
+        remove_blip(gps_tracking_entity_blip)
+        gps_tracking_entity_blip = nil
         gps_tracking_target = nil
         return
     end
@@ -1262,8 +1285,10 @@ safe_tick_handler("gps_tracking", function()
     if closest.ped ~= gps_tracking_target then
         update_gps_tracking()
     else
-        -- Ensure route stays active (GTA can disable it)
+        -- Update coord blip position to follow criminal + re-enable route
         if gps_tracking_blip and HUD.DOES_BLIP_EXIST(gps_tracking_blip) then
+            local crim_pos = ENTITY.GET_ENTITY_COORDS(closest.ped, true)
+            HUD.SET_BLIP_COORDS(gps_tracking_blip, crim_pos.x, crim_pos.y, crim_pos.z)
             HUD.SET_BLIP_ROUTE(gps_tracking_blip, true)
         end
     end
@@ -4340,6 +4365,8 @@ util.on_stop(function()
     -- GPS tracking cleanup
     remove_blip(gps_tracking_blip)
     gps_tracking_blip = nil
+    remove_blip(gps_tracking_entity_blip)
+    gps_tracking_entity_blip = nil
     gps_tracking_target = nil
     gps_tracking_active = false
 
