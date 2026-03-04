@@ -2,7 +2,7 @@
 
 **GTA V Police Role-Play Script for Stand Mod Menu**
 
-[![Version](https://img.shields.io/badge/version-1.4.0-blue.svg)](https://github.com/Valley658/POLICE_SIM/releases/latest)
+[![Version](https://img.shields.io/badge/version-1.6.2-blue.svg)](https://github.com/Valley658/POLICE_SIM/releases/latest)
 [![License](https://img.shields.io/badge/license-Free-green.svg)](#)
 [![Languages](https://img.shields.io/badge/languages-12-orange.svg)](#-supported-languages)
 
@@ -43,12 +43,17 @@ Put on a uniform, patrol the streets, respond to crimes, and climb the ranks fro
 - **Undercover Mode** — Switch to civilian clothes & vehicle
 - **Prisoner Transport** — Transport arrested prisoners for bonus points
 - **Bounty Board** — Track and eliminate high-value targets
+- **Emergency Calls** — Respond to 6 types of urgent emergencies
+- **DUI Checkpoint** — Set up sobriety checkpoints
+- **Suspect Search** — Search pedestrians for contraband
+- **Escort Mission** — VIP protection escort missions
+- **Police Boat** — Water patrol capability
 
 ### 📊 Progression
 - **Rank System** — 9 ranks from Cadet to Chief of Police
 - **Difficulty Presets** — Easy / Normal / Hard / Extreme
 - **Duty Stats** — Track arrests, kills, and duty time
-- **Logging System** — Automatic event logging to file
+- **Logging System** — Automatic event logging with per-session log files
 
 ---
 
@@ -123,7 +128,7 @@ Stand/
         ├── Setting/
         │   └── Setting.txt
         ├── Image/           (auto-created)
-        └── Log.txt          (auto-created)
+        └── logs/            (auto-created, per-session log files)
 ```
 
 ---
