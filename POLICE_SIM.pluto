@@ -1,6 +1,6 @@
 -- POLICE_SIM.pluto
 
-local SCRIPT_VERSION = "1.6.0"
+local SCRIPT_VERSION = "1.6.1"
 
 if not util then
     error("This script must be run inside the Stand environment.")
@@ -638,6 +638,24 @@ local function radio_message(msg)
 end
 
 local function get_random_pos_around(center, min_dist, max_dist)
+    local out = memory.alloc(24)
+
+    -- Try multiple attempts to find a pedestrian-safe position on sidewalks/paths
+    for attempt = 1, 5 do
+        local angle = math.random() * math.pi * 2
+        local dist = min_dist + math.random() * (max_dist - min_dist)
+        local x = center.x + math.cos(angle) * dist
+        local y = center.y + math.sin(angle) * dist
+
+        if PATHFIND.GET_SAFE_COORD_FOR_PED(x, y, center.z, true, out, 1) then
+            local sx = memory.read_float(out)
+            local sy = memory.read_float(out + 8)
+            local sz = memory.read_float(out + 16)
+            return v3(sx, sy, sz)
+        end
+    end
+
+    -- Fallback: raw ground Z detection
     local angle = math.random() * math.pi * 2
     local dist = min_dist + math.random() * (max_dist - min_dist)
     local x = center.x + math.cos(angle) * dist
