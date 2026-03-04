@@ -1,6 +1,6 @@
 -- POLICE_SIM.pluto
 
-local SCRIPT_VERSION = "1.6.1"
+local SCRIPT_VERSION = "1.6.2"
 
 if not util then
     error("This script must be run inside the Stand environment.")
