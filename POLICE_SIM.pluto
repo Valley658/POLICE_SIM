@@ -1,6 +1,6 @@
 -- POLICE_SIM.pluto
 
-local SCRIPT_VERSION = "1.7.0"
+local SCRIPT_VERSION = "1.8.0"
 
 if not util then
     error("This script must be run inside the Stand environment.")
@@ -891,6 +891,24 @@ local function stop_police_mode()
     local current_pos = players.get_position(players.user())
     local heading = ENTITY.GET_ENTITY_HEADING(police_ped)
 
+    -- Remove police ped from vehicle before switching to prevent NPC driving
+    if PED.IS_PED_IN_ANY_VEHICLE(police_ped, false) then
+        local cur_veh = PED.GET_VEHICLE_PED_IS_IN(police_ped, false)
+        TASK.CLEAR_PED_TASKS_IMMEDIATELY(police_ped)
+        TASK.TASK_LEAVE_VEHICLE(police_ped, cur_veh, 16) -- 16 = teleport out instantly
+        util.yield(100)
+    end
+
+    -- Freeze police ped to prevent AI actions during transition
+    ENTITY.FREEZE_ENTITY_POSITION(police_ped, true)
+    PED.SET_PED_CAN_RAGDOLL(police_ped, false)
+    PED.SET_BLOCKING_OF_NON_TEMPORARY_EVENTS(police_ped, true)
+    TASK.CLEAR_PED_TASKS_IMMEDIATELY(police_ped)
+
+    -- Delete patrol vehicle (police car)
+    safe_delete(patrol_vehicle)
+    patrol_vehicle = nil
+
     if original_player_ped and ENTITY.DOES_ENTITY_EXIST(original_player_ped) then
         ENTITY.SET_ENTITY_COORDS_NO_OFFSET(original_player_ped, current_pos.x, current_pos.y, current_pos.z, false, false, false)
         ENTITY.SET_ENTITY_HEADING(original_player_ped, heading)
@@ -903,14 +921,19 @@ local function stop_police_mode()
         ENTITY.SET_ENTITY_HEALTH(original_player_ped, ENTITY.GET_ENTITY_MAX_HEALTH(original_player_ped), 0)
 
         PLAYER.CHANGE_PLAYER_PED(players.user(), original_player_ped, false, false)
-        util.yield(1000)
+        util.yield(500)
 
+        -- Delete the police ped immediately after switching
         if police_ped ~= players.user_ped() and ENTITY.DOES_ENTITY_EXIST(police_ped) then
             safe_delete(police_ped)
         end
     else
+        -- Even if restoration fails, delete the police ped to prevent it from acting
         log_error("stop_police_mode", "Character restoration failed - original_player_ped invalid or missing")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Character restoration failed!") .. "\n" .. T("Reconnect session or use appearance change."))
+        if ENTITY.DOES_ENTITY_EXIST(police_ped) then
+            safe_delete(police_ped)
+        end
     end
 
     PLAYER.SET_PLAYER_CONTROL(players.user(), true, 0)
