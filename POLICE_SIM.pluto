@@ -1,6 +1,6 @@
 -- POLICE_SIM.pluto
 
-local SCRIPT_VERSION = "1.6.2"
+local SCRIPT_VERSION = "1.7.0"
 
 if not util then
     error("This script must be run inside the Stand environment.")
@@ -4274,129 +4274,18 @@ end)
 reg(ref, ROOT, function() return T("Duty Stats") end, function() return T("Show current duty statistics.") end)
 
 util.on_stop(function()
+    log_event("SYSTEM", "Police Simulator stopping")
+
+    -- Auto end duty if still on duty
+    if police_mode then
+        log_event("SYSTEM", "Auto ending duty on script stop")
+        stop_police_mode()
+    end
+
+    -- GPS tracking cleanup
+    remove_blip(gps_tracking_blip)
+    gps_tracking_blip = nil
+    gps_tracking_active = false
+
     log_event("SYSTEM", "Police Simulator stopped")
-    wave_active = false
-
-    -- Clean up tactical features
-    for _, s in ipairs(spike_strips) do
-        safe_delete(s.obj)
-        remove_blip(s.blip)
-    end
-    for _, b in ipairs(backup_units) do
-        safe_delete(b.ped)
-        remove_blip(b.blip)
-    end
-    for _, b in ipairs(bounty_targets) do
-        safe_delete(b.ped)
-        remove_blip(b.blip)
-    end
-    for _, obj in ipairs(roadblock_objects) do
-        safe_delete(obj)
-    end
-    safe_delete(heli_pilot)
-    safe_delete(police_heli)
-    heli_pilot = nil
-    police_heli = nil
-    safe_delete(k9_dog)
-    remove_blip(k9_blip)
-    k9_dog = nil
-    k9_blip = nil
-    for _, s in ipairs(swat_team) do
-        safe_delete(s.ped)
-        remove_blip(s.blip)
-    end
-    safe_delete(swat_vehicle)
-    swat_vehicle = nil
-    speed_trap_active = false
-    remove_blip(speed_trap_blip)
-    speed_trap_blip = nil
-    safe_delete(transport_vehicle)
-    transport_vehicle = nil
-    remove_blip(transport_dest_blip)
-    transport_dest_blip = nil
-    transport_active = false
-    -- Emergency call cleanup
-    safe_delete(emergency_hostage)
-    emergency_hostage = nil
-    remove_blip(emergency_blip)
-    emergency_blip = nil
-    emergency_active = false
-    emergency_type = nil
-    emergency_pos = nil
-    -- DUI checkpoint cleanup
-    for _, obj in ipairs(dui_checkpoint_objects) do
-        safe_delete(obj)
-    end
-    dui_checkpoint_objects = {}
-    remove_blip(dui_checkpoint_blip)
-    dui_checkpoint_blip = nil
-    dui_checkpoint_active = false
-    -- Escort cleanup
-    for _, a in ipairs(escort_attackers) do
-        safe_delete(a.ped)
-        safe_delete(a.vehicle)
-        remove_blip(a.blip)
-    end
-    escort_attackers = {}
-    safe_delete(escort_vip)
-    safe_delete(escort_vehicle)
-    escort_vip = nil
-    escort_vehicle = nil
-    remove_blip(escort_dest_blip)
-    escort_dest_blip = nil
-    escort_active = false
-    -- Police boat cleanup
-    safe_delete(police_boat)
-    police_boat = nil
-    if traffic_stop_target and ENTITY.DOES_ENTITY_EXIST(traffic_stop_target) then
-        VEHICLE.SET_VEHICLE_INDICATOR_LIGHTS(traffic_stop_target, 0, false)
-        VEHICLE.SET_VEHICLE_INDICATOR_LIGHTS(traffic_stop_target, 1, false)
-    end
-    traffic_stop_target = nil
-    traffic_stop_active = false
-
-    for _, c in ipairs(criminals) do
-        safe_delete(c.ped)
-        safe_delete(c.vehicle)
-        remove_blip(c.blip)
-    end
-
-    safe_delete(patrol_partner)
-
-    if patrol_vehicle and ENTITY.DOES_ENTITY_EXIST(patrol_vehicle) then
-        if PED.IS_PED_IN_VEHICLE(players.user_ped(), patrol_vehicle, false) then
-            TASK.CLEAR_PED_TASKS_IMMEDIATELY(players.user_ped())
-            local pos = players.get_position(players.user())
-            ENTITY.SET_ENTITY_COORDS(players.user_ped(), pos.x + 3, pos.y + 3, pos.z + 0.5, true, false, false, true)
-            util.yield(200)
-        end
-        entities.delete_by_handle(patrol_vehicle)
-    end
-
-    if police_mode and original_player_ped and ENTITY.DOES_ENTITY_EXIST(original_player_ped) then
-        local police_ped = players.user_ped()
-        local pos = players.get_position(players.user())
-        local heading = ENTITY.GET_ENTITY_HEADING(police_ped)
-
-        ENTITY.SET_ENTITY_COORDS_NO_OFFSET(original_player_ped, pos.x, pos.y, pos.z, false, false, false)
-        ENTITY.SET_ENTITY_HEADING(original_player_ped, heading)
-        ENTITY.SET_ENTITY_VISIBLE(original_player_ped, true, false)
-        ENTITY.SET_ENTITY_COLLISION(original_player_ped, true, true)
-        ENTITY.FREEZE_ENTITY_POSITION(original_player_ped, false)
-        ENTITY.SET_ENTITY_INVINCIBLE(original_player_ped, false)
-        ENTITY.SET_ENTITY_ALPHA(original_player_ped, 255, false)
-        ENTITY.SET_ENTITY_HEALTH(original_player_ped, ENTITY.GET_ENTITY_MAX_HEALTH(original_player_ped), 0)
-
-        PLAYER.CHANGE_PLAYER_PED(players.user(), original_player_ped, false, false)
-        util.yield(500)
-
-        if police_ped ~= players.user_ped() and ENTITY.DOES_ENTITY_EXIST(police_ped) then
-            entities.delete_by_handle(police_ped)
-        end
-    end
-
-    menu.set_value(godmode_ref, original_godmode)
-    original_player_ped = nil
-    criminals = {}
-    police_mode = false
 end)
