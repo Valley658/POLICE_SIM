@@ -73,13 +73,13 @@ Select language. = Seleccionar idioma.
 
 # === Ajustes ===
 Criminal Settings = Ajustes de Criminales
-Criminal Accuracy (%) = Precisión Criminal (%)
-How accurate criminals shoot. Higher = harder. = Precisión de disparo criminal. Mayor = más difícil.
+Criminal Accuracy = Precisión Criminal
+How accurate criminals shoot. Higher is harder. = Precisión de disparo criminal. Mayor = más difícil.
 Criminal Health Multiplier = Multiplicador de Salud Criminal
-Criminal health multiplier. 1x = normal, 5x = very tough. = Multiplicador de salud criminal. 1x = normal, 5x = muy resistente.
-Criminal Flee Chance (%) = Probabilidad de Huida (%)
+Criminal health multiplier. 1x is normal, 5x is very tough. = Multiplicador de salud criminal. 1x = normal, 5x = muy resistente.
+Criminal Flee Chance = Probabilidad de Huida
 Chance that criminals will flee instead of fight. = Probabilidad de que los criminales huyan en vez de luchar.
-Criminal Vehicle Chance (%) = Probabilidad de Vehículo (%)
+Criminal Vehicle Chance = Probabilidad de Vehículo
 Chance that criminals will have a vehicle. = Probabilidad de que los criminales tengan vehículo.
 Player Settings = Ajustes de Jugador
 Player Invincible = Jugador Invencible
