@@ -73,13 +73,13 @@ Select language. = Выбрать язык.
 
 # === Настройки ===
 Criminal Settings = Настройки Преступников
-Criminal Accuracy (%) = Точность Преступников (%)
-How accurate criminals shoot. Higher = harder. = Точность стрельбы преступников. Выше = сложнее.
+Criminal Accuracy = Точность Преступников
+How accurate criminals shoot. Higher is harder. = Точность стрельбы преступников. Выше = сложнее.
 Criminal Health Multiplier = Множитель Здоровья Преступников
-Criminal health multiplier. 1x = normal, 5x = very tough. = Множитель здоровья преступников. 1x = обычно, 5x = очень крепкие.
-Criminal Flee Chance (%) = Шанс Побега (%)
+Criminal health multiplier. 1x is normal, 5x is very tough. = Множитель здоровья преступников. 1x = обычно, 5x = очень крепкие.
+Criminal Flee Chance = Шанс Побега
 Chance that criminals will flee instead of fight. = Шанс, что преступники убегут вместо драки.
-Criminal Vehicle Chance (%) = Шанс Автомобиля (%)
+Criminal Vehicle Chance = Шанс Автомобиля
 Chance that criminals will have a vehicle. = Шанс, что у преступников будет автомобиль.
 Player Settings = Настройки Игрока
 Player Invincible = Игрок Бессмертен
