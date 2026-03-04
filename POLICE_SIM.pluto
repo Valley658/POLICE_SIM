@@ -1,6 +1,6 @@
 -- POLICE_SIM.pluto
 
-local SCRIPT_VERSION = "1.9.3"
+local SCRIPT_VERSION = "1.9.4"
 
 if not util then
     error("This script must be run inside the Stand environment.")
@@ -140,11 +140,7 @@ end)
 
 -- ==================== NOTIFICATION SYSTEM ====================
 
-local notification_type = read_setting("Notification Type") or "Stand"
-if notification_type ~= "Stand" and notification_type ~= "In-Game" and notification_type ~= "No Notification" then
-    notification_type = "Stand"
-    write_setting("Notification Type", "Stand")
-end
+local notification_type = "Stand" -- will be loaded after read_setting is defined
 
 local function NOTIFY(message)
     LOG("| NOTIFY | " .. message)
@@ -310,6 +306,13 @@ local function write_setting(key, value)
         for _, line in ipairs(lines) do f:write(line .. "\n") end
         f:close()
     end
+end
+
+-- Load notification_type from settings (now that read_setting is defined)
+notification_type = read_setting("Notification Type") or "Stand"
+if notification_type ~= "Stand" and notification_type ~= "In-Game" and notification_type ~= "No Notification" then
+    notification_type = "Stand"
+    write_setting("Notification Type", "Stand")
 end
 
 local Translations = {}
