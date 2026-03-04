@@ -1,6 +1,6 @@
 -- POLICE_SIM.pluto
 
-local SCRIPT_VERSION = "1.5.0"
+local SCRIPT_VERSION = "1.6.0"
 
 if not util then
     error("This script must be run inside the Stand environment.")
@@ -20,20 +20,121 @@ filesystem.mkdirs(LANG_DIR)
 filesystem.mkdirs(SETTING_DIR)
 filesystem.mkdirs(IMG_DIR)
 
--- ==================== LOGGING SYSTEM ====================
+-- ==================== LOGGING SYSTEM (HC-Style) ====================
+
+-- Immediately write to log file (HC approach: io.open "a+", write, close)
+local function LOG(message)
+    local f = io.open(LOG_FILE, "a+")
+    if f then
+        f:write(os.date("[%m/%d/%Y %I:%M:%S %p]") .. " " .. message .. "\n")
+        f:close()
+    end
+end
 
 local function log_event(category, message)
-    local f = io.open(LOG_FILE, "a")
-    if f then
-        local timestamp = os.date("%Y-%m-%d %H:%M:%S")
-        f:write("[" .. timestamp .. "] [" .. category .. "] " .. message .. "\n")
-        f:close()
+    LOG("[" .. category .. "] " .. message)
+end
+
+local function log_error(source, err_msg)
+    LOG("Police Simulator Version: v" .. SCRIPT_VERSION)
+    LOG("| ERROR | " .. source .. " | " .. tostring(err_msg))
+end
+
+local function log_warning(source, message)
+    log_event("WARNING", source .. " | " .. message)
+end
+
+-- HC-style fatal error: log + toast + stop
+local function ERROR_LOG(error_message)
+    LOG("Police Simulator Version: v" .. SCRIPT_VERSION)
+    LOG("| Police Simulator - ERROR | " .. error_message)
+    util.toast("[Police Simulator] ERROR\n\n" .. error_message)
+    util.stop_script()
+end
+
+-- xpcall error handler: writes to log IMMEDIATELY inside the handler
+-- This runs BEFORE the stack unwinds, ensuring Stand can't prevent logging
+local function make_error_handler(source)
+    return function(err)
+        local msg = tostring(err)
+        local trace = msg
+        if debug and debug.traceback then
+            trace = debug.traceback(msg, 2)
+        end
+        -- Write IMMEDIATELY to file inside error handler
+        local f = io.open(LOG_FILE, "a+")
+        if f then
+            f:write(os.date("[%m/%d/%Y %I:%M:%S %p]") .. " Police Simulator Version: v" .. SCRIPT_VERSION .. "\n")
+            f:write(os.date("[%m/%d/%Y %I:%M:%S %p]") .. " | ERROR | " .. source .. " | " .. trace .. "\n")
+            f:close()
+        end
+        -- Also output via Stand's toast (shows in-game)
+        util.toast("[Police Simulator] Error in " .. source .. ":\n" .. msg)
+        -- Also output via Stand's logger (Stand log file + console)
+        util.log("[Police Simulator] Error in " .. source .. ": " .. msg)
+        return trace
+    end
+end
+
+local function safe_call(func_name, func, ...)
+    local args = {...}
+    local ok, result = xpcall(function()
+        return func(table.unpack(args))
+    end, make_error_handler(func_name))
+    if not ok then
+        return nil
+    end
+    return result
+end
+
+-- Tick handler wrapper: xpcall catches errors every tick and logs them
+local function safe_tick_handler(name, func)
+    util.create_tick_handler(function()
+        local ok, result = xpcall(func, make_error_handler("tick:" .. name))
+        if not ok then
+            return false -- stop tick handler on error to prevent spam
+        end
+        return result -- pass through return value (nil/true = continue, false = stop)
+    end)
+end
+
+-- Thread wrapper: xpcall catches errors in threads and logs them
+local function safe_thread(name, func)
+    util.create_thread(function()
+        xpcall(func, make_error_handler("thread:" .. name))
+    end)
+end
+
+-- Safe wrapper for PLACE_ENTITY_ON_GROUND_PROPERLY (check before call)
+local function place_on_ground(entity)
+    if entity and ENTITY.DOES_ENTITY_EXIST(entity) then
+        if ENTITY.PLACE_ENTITY_ON_GROUND_PROPERLY then
+            ENTITY.PLACE_ENTITY_ON_GROUND_PROPERLY(entity, true)
+        else
+            -- Fallback: use ground Z detection
+            local pos = ENTITY.GET_ENTITY_COORDS(entity, true)
+            local ground = memory.alloc(4)
+            if MISC.GET_GROUND_Z_FOR_3D_COORD(pos.x, pos.y, pos.z + 5.0, ground, false, false) then
+                local gz = memory.read_float(ground)
+                ENTITY.SET_ENTITY_COORDS(entity, pos.x, pos.y, gz, true, false, false, true)
+            end
+        end
     end
 end
 
 local function log_init()
     log_event("SYSTEM", "Police Simulator v" .. SCRIPT_VERSION .. " started")
+    log_event("SYSTEM", "Log system initialized")
 end
+
+-- Register stop handlers to log script termination
+util.on_pre_stop(function()
+    LOG("| SYSTEM | Script stop initiated (on_pre_stop)")
+end)
+
+util.on_stop(function()
+    LOG("| SYSTEM | Police Simulator v" .. SCRIPT_VERSION .. " stopped")
+end)
 
 -- ==================== IMAGE / BANNER ====================
 
@@ -550,7 +651,6 @@ local function get_random_pos_around(center, min_dist, max_dist)
             break
         end
     end
-    memory.free(found)
 
     return v3(x, y, z)
 end
@@ -580,12 +680,14 @@ end
 
 local function start_police_mode()
     if police_mode then
+        log_event("DUTY", "Attempted to start duty while already on duty")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Already on duty."))
         return
     end
 
     local model_info = POLICE_MODELS[selected_model_idx]
     local model_hash = util.joaat(model_info.hash)
+    log_event("DUTY", "Starting duty | Requesting model: " .. model_info.hash)
     util.request_model(model_hash)
 
     original_player_ped = players.user_ped()
@@ -593,6 +695,7 @@ local function start_police_mode()
 
     local police_ped = PED.CREATE_PED(4, model_hash, current_pos.x, current_pos.y, current_pos.z, ENTITY.GET_ENTITY_HEADING(original_player_ped), true, false)
     if police_ped == 0 then
+        log_error("start_police_mode", "Police ped creation failed for model: " .. model_info.hash)
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Police ped creation failed!"))
         original_player_ped = nil
         STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(model_hash)
@@ -777,6 +880,7 @@ local function stop_police_mode()
             safe_delete(police_ped)
         end
     else
+        log_error("stop_police_mode", "Character restoration failed - original_player_ped invalid or missing")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Character restoration failed!") .. "\n" .. T("Reconnect session or use appearance change."))
     end
 
@@ -830,6 +934,7 @@ local function spawn_partner()
     WEAPON.GIVE_WEAPON_TO_PED(patrol_partner, util.joaat("weapon_pumpshotgun"), 50, false, false)
 
     STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(partner_hash)
+    log_event("DUTY", "Patrol partner spawned with weapon: " .. pw.hash)
 end
 
 local function spawn_patrol_vehicle()
@@ -847,6 +952,7 @@ local function spawn_patrol_vehicle()
 
     patrol_vehicle = VEHICLE.CREATE_VEHICLE(veh_hash, spawn_x, spawn_y, pos.z + 0.5, heading, true, false, false)
     if patrol_vehicle == 0 then
+        log_error("spawn_patrol_vehicle", "Vehicle spawn failed for model: " .. veh_info.hash)
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Vehicle spawn failed!"))
         patrol_vehicle = nil
         return
@@ -870,16 +976,21 @@ local function spawn_patrol_vehicle()
 end
 
 local function spawn_criminal(pos, armed, has_vehicle)
-    if #criminals >= max_criminals then return nil end
+    if #criminals >= max_criminals then
+        log_warning("spawn_criminal", "Max criminals reached (" .. max_criminals .. ")")
+        return nil
+    end
 
     local model_hash = util.joaat(CRIMINAL_MODELS[math.random(1, #CRIMINAL_MODELS)])
     util.request_model(model_hash)
 
     local criminal_ped = PED.CREATE_PED(4, model_hash, pos.x, pos.y, pos.z, math.random(0, 360) * 1.0, true, false)
     if criminal_ped == 0 then
+        log_error("spawn_criminal", "Criminal ped creation failed at pos: " .. string.format("%.1f, %.1f, %.1f", pos.x, pos.y, pos.z))
         STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(model_hash)
         return nil
     end
+    log_event("CRIME", "Criminal spawned | Armed: " .. tostring(armed) .. " | Vehicle: " .. tostring(has_vehicle) .. " | Total: " .. (#criminals + 1))
 
     ENTITY.SET_ENTITY_AS_MISSION_ENTITY(criminal_ped, true, true)
 
@@ -1036,6 +1147,7 @@ local function start_chase(criminal_data)
 
     chase_target = criminal_data
     chase_active = true
+    log_event("CHASE", "Chase started")
 
     NETWORK.NETWORK_REQUEST_CONTROL_OF_ENTITY(criminal_data.ped)
     util.yield(100)
@@ -1059,12 +1171,13 @@ local function start_chase(criminal_data)
 end
 
 local function stop_chase()
+    log_event("CHASE", "Chase ended")
     chase_active = false
     chase_target = nil
     radio_message(T("Chase ended."))
 end
 
-util.create_tick_handler(function()
+safe_tick_handler("player_protection", function()
     if police_mode and original_player_ped and ENTITY.DOES_ENTITY_EXIST(original_player_ped) then
         ENTITY.SET_ENTITY_AS_MISSION_ENTITY(original_player_ped, true, true)
         ENTITY.FREEZE_ENTITY_POSITION(original_player_ped, true)
@@ -1087,7 +1200,7 @@ util.create_tick_handler(function()
     end
 end)
 
-util.create_tick_handler(function()
+safe_tick_handler("criminal_tracking", function()
     if not police_mode then return end
 
     for i = #criminals, 1, -1 do
@@ -1110,7 +1223,7 @@ util.create_tick_handler(function()
                 local veh_ref = c.vehicle
                 table.remove(criminals, i)
 
-                util.create_thread(function()
+                safe_thread("criminal_cleanup", function()
                     util.yield(3000)
                     safe_delete(ped_ref)
                     safe_delete(veh_ref)
@@ -1134,7 +1247,7 @@ end)
 local last_crime_time = 0
 local crime_interval = 30
 
-util.create_tick_handler(function()
+safe_tick_handler("auto_crime", function()
     if not police_mode or not auto_detect_crime then return end
 
     local now = os.time()
@@ -1146,7 +1259,7 @@ util.create_tick_handler(function()
     end
 end)
 
-util.create_tick_handler(function()
+safe_tick_handler("partner_follow", function()
     if not police_mode or not patrol_partner then return end
     if not ENTITY.DOES_ENTITY_EXIST(patrol_partner) then
         patrol_partner = nil
@@ -1170,16 +1283,18 @@ end)
 
 local function start_wave_mode()
     if wave_active then
+        log_event("WAVE", "Attempted to start wave while already active")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Wave already in progress."))
         return
     end
 
     wave_active = true
     wave_number = 0
+    log_event("WAVE", "Wave mode started")
 
     radio_message(T("HQ, large-scale criminal activity! Wave mode!"))
 
-    util.create_thread(function()
+    safe_thread("wave_mode", function()
         while wave_active and police_mode do
             wave_number = wave_number + 1
             local num_criminals = math.min(wave_number + 1, max_criminals)
@@ -1219,6 +1334,7 @@ local function start_wave_mode()
 end
 
 local function stop_wave_mode()
+    log_event("WAVE", "Wave mode stopped | Total waves completed: " .. wave_number)
     wave_active = false
     radio_message(T("Wave mode stopped."))
 end
@@ -1259,10 +1375,12 @@ end
 
 local function deploy_spike_strip()
     if not police_mode then
+        log_warning("deploy_spike_strip", "Attempted without being on duty")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
         return
     end
     if #spike_strips >= max_spike_strips then
+        log_warning("deploy_spike_strip", "Max spike strips reached (" .. max_spike_strips .. ")")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Max spike strips reached"))
         return
     end
@@ -1282,12 +1400,11 @@ local function deploy_spike_strip()
     if MISC.GET_GROUND_Z_FOR_3D_COORD(sx, sy, pos.z + 5.0, ground, false, false) then
         sz = memory.read_float(ground)
     end
-    memory.free(ground)
 
     local obj = OBJECT.CREATE_OBJECT(hash, sx, sy, sz, true, false, false)
     if obj ~= 0 then
         ENTITY.SET_ENTITY_AS_MISSION_ENTITY(obj, true, true)
-        ENTITY.PLACE_ENTITY_ON_GROUND_PROPERLY(obj, true)
+        place_on_ground(obj)
         ENTITY.SET_ENTITY_HEADING(obj, heading + 90.0)
         ENTITY.FREEZE_ENTITY_POSITION(obj, true)
 
@@ -1298,12 +1415,14 @@ local function deploy_spike_strip()
         HUD.SET_BLIP_AS_SHORT_RANGE(blip, true)
 
         table.insert(spike_strips, {obj = obj, blip = blip, x = sx, y = sy, z = sz})
+        log_event("TACTICAL", "Spike strip deployed (" .. #spike_strips .. "/" .. max_spike_strips .. ")")
         radio_message(T("Spike strip deployed") .. " (" .. #spike_strips .. "/" .. max_spike_strips .. ")")
     end
     STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(hash)
 end
 
 local function clear_spike_strips()
+    log_event("TACTICAL", "All spike strips removed (" .. #spike_strips .. ")")
     for _, s in ipairs(spike_strips) do
         safe_delete(s.obj)
         remove_blip(s.blip)
@@ -1316,10 +1435,12 @@ end
 
 local function request_backup()
     if not police_mode then
+        log_warning("request_backup", "Attempted without being on duty")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
         return
     end
     if #backup_units >= max_backup then
+        log_warning("request_backup", "Max backup reached (" .. max_backup .. ")")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Max backup reached"))
         return
     end
@@ -1332,6 +1453,7 @@ local function request_backup()
 
     local ped = PED.CREATE_PED(4, model_hash, spawn_pos.x, spawn_pos.y, spawn_pos.z, 0.0, true, false)
     if ped == 0 then
+        log_error("request_backup", "Backup ped creation failed")
         STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(model_hash)
         return
     end
@@ -1362,11 +1484,13 @@ local function request_backup()
 
     table.insert(backup_units, {ped = ped, blip = blip})
     STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(model_hash)
+    log_event("TACTICAL", "Backup unit arrived (" .. #backup_units .. "/" .. max_backup .. ")")
 
     radio_message(T("Backup arrived!") .. " (" .. #backup_units .. "/" .. max_backup .. ")")
 end
 
 local function dismiss_backup()
+    log_event("TACTICAL", "All backup dismissed (" .. #backup_units .. ")")
     for _, b in ipairs(backup_units) do
         safe_delete(b.ped)
         remove_blip(b.blip)
@@ -1379,6 +1503,7 @@ end
 
 local function deploy_helicopter()
     if not police_mode then
+        log_warning("deploy_helicopter", "Attempted without being on duty")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
         return
     end
@@ -1400,6 +1525,7 @@ local function deploy_helicopter()
         police_heli = nil
         STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(heli_hash)
         STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(pilot_hash)
+        log_error("deploy_helicopter", "Helicopter spawn failed")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Helicopter spawn failed!"))
         return
     end
@@ -1426,10 +1552,12 @@ local function deploy_helicopter()
     STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(heli_hash)
     STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(pilot_hash)
 
+    log_event("TACTICAL", "Helicopter deployed")
     radio_message(T("Air support deployed! Helicopter on station."))
 end
 
 local function dismiss_helicopter()
+    log_event("TACTICAL", "Helicopter dismissed")
     safe_delete(heli_pilot)
     safe_delete(police_heli)
     heli_pilot = nil
@@ -1441,6 +1569,7 @@ end
 
 local function throw_flashbang()
     if not police_mode then
+        log_warning("throw_flashbang", "Attempted without being on duty")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
         return
     end
@@ -1467,8 +1596,9 @@ local function throw_flashbang()
     end
 
     radio_message(T("Flashbang deployed!") .. " " .. stunned .. " " .. T("stunned"))
+    log_event("TACTICAL", "Flashbang deployed | Stunned: " .. stunned)
 
-    util.create_thread(function()
+    safe_thread("flashbang_recovery", function()
         util.yield(3000)
         for _, c in ipairs(criminals) do
             if ENTITY.DOES_ENTITY_EXIST(c.ped) and c.alive and not c.arrested and not ENTITY.IS_ENTITY_DEAD(c.ped) then
@@ -1482,6 +1612,7 @@ end
 
 local function initiate_traffic_stop()
     if not police_mode then
+        log_warning("initiate_traffic_stop", "Attempted without being on duty")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
         return
     end
@@ -1510,6 +1641,7 @@ local function initiate_traffic_stop()
     end
 
     if not best_veh then
+        log_event("TRAFFIC", "Traffic stop failed - no vehicle ahead")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("No vehicle ahead"))
         return
     end
@@ -1541,6 +1673,7 @@ local function initiate_traffic_stop()
     HUD.SET_BLIP_SCALE(blip, 0.7)
 
     radio_message(T("Traffic stop initiated"))
+    log_event("TRAFFIC", "Traffic stop initiated")
 end
 
 local function order_driver_out()
@@ -1559,7 +1692,7 @@ local function order_driver_out()
     if driver ~= 0 then
         NETWORK.NETWORK_REQUEST_CONTROL_OF_ENTITY(driver)
         TASK.TASK_LEAVE_VEHICLE(driver, traffic_stop_target, 0)
-        util.create_thread(function()
+        safe_thread("traffic_stop_handsup", function()
             util.yield(3000)
             if ENTITY.DOES_ENTITY_EXIST(driver) and not PED.IS_PED_IN_ANY_VEHICLE(driver, false) then
                 TASK.TASK_HANDS_UP(driver, 10000, players.user_ped(), -1, false)
@@ -1567,6 +1700,7 @@ local function order_driver_out()
         end)
     end
 
+    log_event("TRAFFIC", "Driver ordered out of vehicle")
     radio_message(T("Driver ordered out of vehicle"))
 end
 
@@ -1582,6 +1716,7 @@ local function end_traffic_stop()
     end
     traffic_stop_target = nil
     traffic_stop_active = false
+    log_event("TRAFFIC", "Traffic stop ended")
     radio_message(T("Traffic stop ended"))
 end
 
@@ -1589,6 +1724,7 @@ end
 
 local function deploy_roadblock()
     if not police_mode then
+        log_warning("deploy_roadblock", "Attempted without being on duty")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
         return
     end
@@ -1605,7 +1741,6 @@ local function deploy_roadblock()
     if MISC.GET_GROUND_Z_FOR_3D_COORD(base_x, base_y, base_z + 10.0, ground, false, false) then
         base_z = memory.read_float(ground)
     end
-    memory.free(ground)
 
     local right_x = -fwd.y
     local right_y = fwd.x
@@ -1637,7 +1772,7 @@ local function deploy_roadblock()
         local obj = OBJECT.CREATE_OBJECT(hash, ox, oy, base_z, true, false, false)
         if obj ~= 0 then
             ENTITY.SET_ENTITY_AS_MISSION_ENTITY(obj, true, true)
-            ENTITY.PLACE_ENTITY_ON_GROUND_PROPERLY(obj, true)
+            place_on_ground(obj)
             ENTITY.SET_ENTITY_HEADING(obj, heading + 90.0)
             ENTITY.FREEZE_ENTITY_POSITION(obj, true)
             table.insert(roadblock_objects, obj)
@@ -1654,7 +1789,7 @@ local function deploy_roadblock()
         local obj = OBJECT.CREATE_OBJECT(hash, ox, oy, base_z, true, false, false)
         if obj ~= 0 then
             ENTITY.SET_ENTITY_AS_MISSION_ENTITY(obj, true, true)
-            ENTITY.PLACE_ENTITY_ON_GROUND_PROPERLY(obj, true)
+            place_on_ground(obj)
             ENTITY.FREEZE_ENTITY_POSITION(obj, true)
             table.insert(roadblock_objects, obj)
         end
@@ -1662,9 +1797,11 @@ local function deploy_roadblock()
     end
 
     radio_message(T("Roadblock deployed"))
+    log_event("TACTICAL", "Roadblock deployed")
 end
 
 local function clear_roadblocks()
+    log_event("TACTICAL", "All roadblocks cleared (" .. #roadblock_objects .. " objects)")
     for _, obj in ipairs(roadblock_objects) do
         safe_delete(obj)
     end
@@ -1676,10 +1813,12 @@ end
 
 local function generate_bounty()
     if not police_mode then
+        log_warning("generate_bounty", "Attempted without being on duty")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
         return
     end
     if #bounty_targets >= max_bounties then
+        log_warning("generate_bounty", "Max bounties reached (" .. max_bounties .. ")")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Max bounties reached"))
         return
     end
@@ -1734,10 +1873,12 @@ local function generate_bounty()
     })
 
     STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(model_hash)
+    log_event("BOUNTY", "Bounty generated: " .. bounty_name .. " | Reward: +" .. bounty_reward .. " pts")
     radio_message(bounty_name .. " " .. T("spotted!") .. " " .. T("Reward") .. ": +" .. bounty_reward .. " " .. T("pts"))
 end
 
 local function clear_bounties()
+    log_event("BOUNTY", "All bounties cleared (" .. #bounty_targets .. ")")
     for _, b in ipairs(bounty_targets) do
         safe_delete(b.ped)
         remove_blip(b.blip)
@@ -1750,6 +1891,7 @@ end
 
 local function fire_warning_shot()
     if not police_mode then
+        log_warning("fire_warning_shot", "Attempted without being on duty")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
         return
     end
@@ -1780,12 +1922,14 @@ local function fire_warning_shot()
     end
 
     radio_message(T("Warning shot fired!") .. (scared > 0 and (" " .. scared .. " " .. T("fled")) or ""))
+    log_event("TACTICAL", "Warning shot fired | Fled: " .. scared)
 end
 
 -- ==================== K9 UNIT ====================
 
 local function deploy_k9()
     if not police_mode then
+        log_warning("deploy_k9", "Attempted without being on duty")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
         return
     end
@@ -1805,6 +1949,7 @@ local function deploy_k9()
     if k9_dog == 0 then
         k9_dog = nil
         STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(dog_hash)
+        log_error("deploy_k9", "K9 spawn failed")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("K9 spawn failed!"))
         return
     end
@@ -1828,10 +1973,12 @@ local function deploy_k9()
     HUD.SET_BLIP_AS_SHORT_RANGE(k9_blip, true)
 
     STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(dog_hash)
+    log_event("K9", "K9 unit deployed")
     radio_message(T("K9 unit deployed!"))
 end
 
 local function dismiss_k9()
+    log_event("K9", "K9 unit dismissed")
     safe_delete(k9_dog)
     remove_blip(k9_blip)
     k9_dog = nil
@@ -1863,6 +2010,7 @@ local function k9_attack_nearest()
         if nearest_ped then
             NETWORK.NETWORK_REQUEST_CONTROL_OF_ENTITY(k9_dog)
             TASK.TASK_COMBAT_PED(k9_dog, nearest_ped, 0, 16)
+            log_event("K9", "K9 attacking suspect")
             radio_message(T("K9 attacking suspect!"))
             return
         end
@@ -1872,6 +2020,7 @@ local function k9_attack_nearest()
 
     NETWORK.NETWORK_REQUEST_CONTROL_OF_ENTITY(k9_dog)
     TASK.TASK_COMBAT_PED(k9_dog, closest.ped, 0, 16)
+    log_event("K9", "K9 attacking criminal")
     radio_message(T("K9 attacking suspect!"))
 end
 
@@ -1883,6 +2032,7 @@ local function k9_follow()
     NETWORK.NETWORK_REQUEST_CONTROL_OF_ENTITY(k9_dog)
     TASK.CLEAR_PED_TASKS_IMMEDIATELY(k9_dog)
     TASK.TASK_FOLLOW_TO_OFFSET_OF_ENTITY(k9_dog, players.user_ped(), 0.0, -1.5, 0.0, 5.0, -1, 2.0, true)
+    log_event("K9", "K9 set to follow")
     radio_message(T("K9 following"))
 end
 
@@ -1890,10 +2040,12 @@ end
 
 local function call_swat()
     if not police_mode then
+        log_warning("call_swat", "Attempted without being on duty")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
         return
     end
     if #swat_team >= max_swat then
+        log_warning("call_swat", "SWAT team already deployed")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("SWAT team already deployed"))
         return
     end
@@ -1910,7 +2062,6 @@ local function call_swat()
     if MISC.GET_GROUND_Z_FOR_3D_COORD(van_pos.x, van_pos.y, van_pos.z + 10.0, ground, false, false) then
         van_pos.z = memory.read_float(ground)
     end
-    memory.free(ground)
 
     safe_delete(swat_vehicle)
     swat_vehicle = VEHICLE.CREATE_VEHICLE(van_hash, van_pos.x, van_pos.y, van_pos.z + 0.5, ENTITY.GET_ENTITY_HEADING(players.user_ped()) + 180.0, true, false, false)
@@ -1967,12 +2118,14 @@ local function call_swat()
     end
 
     STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(swat_hash)
+    log_event("SWAT", "SWAT team deployed | Members: " .. #swat_team)
     radio_message(T("SWAT team deployed!") .. " " .. #swat_team .. " " .. T("operators on site"))
     AUDIO.PLAY_SOUND_FRONTEND(-1, "CONFIRM_BEEP", "HUD_MINI_GAME_SOUNDSET", true)
     add_rank_points(2)
 end
 
 local function dismiss_swat()
+    log_event("SWAT", "SWAT team dismissed (" .. #swat_team .. " members)")
     for _, s in ipairs(swat_team) do
         safe_delete(s.ped)
         remove_blip(s.blip)
@@ -1996,11 +2149,13 @@ local UNDERCOVER_VEHICLES = {
 
 local function toggle_undercover()
     if not police_mode then
+        log_warning("toggle_undercover", "Attempted without being on duty")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
         return
     end
 
     if undercover_mode then
+        log_event("UNDERCOVER", "Switching back to police uniform")
         -- Switch back to police uniform
         local model_info = POLICE_MODELS[selected_model_idx]
         local model_hash = util.joaat(model_info.hash)
@@ -2026,9 +2181,11 @@ local function toggle_undercover()
         STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(model_hash)
 
         undercover_mode = false
+        log_event("UNDERCOVER", "Undercover mode deactivated")
         radio_message(T("Back in uniform. Undercover mode off."))
     else
         -- Switch to civilian
+        log_event("UNDERCOVER", "Switching to undercover mode")
         local civ_model = UNDERCOVER_MODELS[math.random(1, #UNDERCOVER_MODELS)]
         local model_hash = util.joaat(civ_model)
         util.request_model(model_hash)
@@ -2055,12 +2212,14 @@ local function toggle_undercover()
         STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(model_hash)
 
         undercover_mode = true
+        log_event("UNDERCOVER", "Undercover mode activated")
         radio_message(T("Undercover mode activated. Blend in."))
     end
 end
 
 local function spawn_undercover_vehicle()
     if not police_mode then
+        log_warning("spawn_undercover_vehicle", "Attempted without being on duty")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
         return
     end
@@ -2087,6 +2246,7 @@ local function spawn_undercover_vehicle()
         -- Tinted windows
         VEHICLE.SET_VEHICLE_WINDOW_TINT(veh, 1)
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Undercover vehicle spawned"))
+        log_event("UNDERCOVER", "Undercover vehicle spawned: " .. veh_model)
     end
     STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(veh_hash)
 end
@@ -2095,6 +2255,7 @@ end
 
 local function throw_smoke_grenade()
     if not police_mode then
+        log_warning("throw_smoke_grenade", "Attempted without being on duty")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
         return
     end
@@ -2147,9 +2308,10 @@ local function throw_smoke_grenade()
     end
 
     radio_message(T("Smoke grenade deployed!") .. " " .. blinded .. " " .. T("blinded"))
+    log_event("TACTICAL", "Smoke grenade deployed | Blinded: " .. blinded)
 
     -- Restore accuracy after smoke clears
-    util.create_thread(function()
+    safe_thread("smoke_recovery", function()
         util.yield(8000)
         for _, c in ipairs(criminals) do
             if ENTITY.DOES_ENTITY_EXIST(c.ped) and c.alive and not c.arrested and not ENTITY.IS_ENTITY_DEAD(c.ped) then
@@ -2164,6 +2326,7 @@ end
 
 local function toggle_speed_trap()
     if not police_mode then
+        log_warning("toggle_speed_trap", "Attempted without being on duty")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
         return
     end
@@ -2173,6 +2336,7 @@ local function toggle_speed_trap()
         remove_blip(speed_trap_blip)
         speed_trap_blip = nil
         speed_trap_pos = nil
+        log_event("SPEED_TRAP", "Speed trap deactivated | Fines issued: " .. speed_trap_fines)
         radio_message(T("Speed trap deactivated. Fines issued") .. ": " .. speed_trap_fines)
         if speed_trap_fines > 0 then
             add_rank_points(math.floor(speed_trap_fines / 2))
@@ -2191,6 +2355,7 @@ local function toggle_speed_trap()
         HUD.SET_BLIP_AS_SHORT_RANGE(speed_trap_blip, true)
 
         radio_message(T("Speed trap activated! Limit") .. ": " .. math.floor(speed_trap_limit) .. " km/h")
+        log_event("SPEED_TRAP", "Speed trap activated | Limit: " .. math.floor(speed_trap_limit) .. " km/h")
     end
 end
 
@@ -2198,6 +2363,7 @@ end
 
 local function start_prisoner_transport()
     if not police_mode then
+        log_warning("start_prisoner_transport", "Attempted without being on duty")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
         return
     end
@@ -2211,6 +2377,7 @@ local function start_prisoner_transport()
     end
 
     if arrested_count == 0 then
+        log_event("TRANSPORT", "No prisoners to transport")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("No prisoners to transport"))
         return
     end
@@ -2271,6 +2438,7 @@ local function start_prisoner_transport()
         end
     end
 
+    log_event("TRANSPORT", "Prisoner transport started with " .. transport_prisoners .. " prisoners")
     radio_message(T("Prisoner transport started!") .. " " .. transport_prisoners .. " " .. T("prisoners. Follow GPS."))
 end
 
@@ -2287,12 +2455,14 @@ local function complete_transport()
     transport_dest_pos = nil
     transport_active = false
 
+    log_event("TRANSPORT", "Prisoners delivered, reward: " .. reward .. " pts")
     radio_message(T("Prisoners delivered!") .. " +" .. reward .. " " .. T("pts"))
     AUDIO.PLAY_SOUND_FRONTEND(-1, "MEDAL_UP", "HUD_MINI_GAME_SOUNDSET", true)
     transport_prisoners = 0
 end
 
 local function cancel_transport()
+    log_event("TRANSPORT", "Prisoner transport cancelled")
     safe_delete(transport_vehicle)
     transport_vehicle = nil
     remove_blip(transport_dest_blip)
@@ -2319,7 +2489,7 @@ end
 -- ==================== NEW TICK HANDLERS ====================
 
 -- Spike strip tire popping
-util.create_tick_handler(function()
+safe_tick_handler("spike_strips", function()
     if not police_mode or #spike_strips == 0 then return end
 
     local player_ped = players.user_ped()
@@ -2347,7 +2517,7 @@ util.create_tick_handler(function()
 end)
 
 -- Bounty target tracking
-util.create_tick_handler(function()
+safe_tick_handler("bounty_tracking", function()
     if not police_mode then return end
 
     for i = #bounty_targets, 1, -1 do
@@ -2357,13 +2527,14 @@ util.create_tick_handler(function()
                 b.alive = false
                 add_rank_points(b.reward)
                 remove_blip(b.blip)
+                log_event("BOUNTY", "Target eliminated: " .. b.name .. " | Reward: +" .. b.reward)
                 radio_message(b.name .. " " .. T("eliminated!") .. " +" .. b.reward .. " " .. T("pts"))
                 AUDIO.PLAY_SOUND_FRONTEND(-1, "MEDAL_UP", "HUD_MINI_GAME_SOUNDSET", true)
 
                 local ped_ref = b.ped
                 table.remove(bounty_targets, i)
 
-                util.create_thread(function()
+                safe_thread("bounty_cleanup", function()
                     util.yield(3000)
                     safe_delete(ped_ref)
                 end)
@@ -2376,7 +2547,7 @@ util.create_tick_handler(function()
 end)
 
 -- Backup unit cleanup
-util.create_tick_handler(function()
+safe_tick_handler("backup_cleanup", function()
     if not police_mode then return end
 
     for i = #backup_units, 1, -1 do
@@ -2390,7 +2561,7 @@ util.create_tick_handler(function()
 end)
 
 -- Backup units engage criminals
-util.create_tick_handler(function()
+safe_tick_handler("backup_combat", function()
     if not police_mode or #backup_units == 0 then return end
 
     for _, b in ipairs(backup_units) do
@@ -2428,7 +2599,7 @@ util.create_tick_handler(function()
 end)
 
 -- SWAT team engage criminals
-util.create_tick_handler(function()
+safe_tick_handler("swat_combat", function()
     if not police_mode or #swat_team == 0 then return end
 
     for i = #swat_team, 1, -1 do
@@ -2467,7 +2638,7 @@ util.create_tick_handler(function()
 end)
 
 -- Speed trap monitoring
-util.create_tick_handler(function()
+safe_tick_handler("speed_trap", function()
     if not police_mode or not speed_trap_active or not speed_trap_pos then return end
 
     local trap_v3 = v3(speed_trap_pos.x, speed_trap_pos.y, speed_trap_pos.z)
@@ -2496,7 +2667,7 @@ util.create_tick_handler(function()
 end)
 
 -- Prisoner transport tracking
-util.create_tick_handler(function()
+safe_tick_handler("transport_tracking", function()
     if not police_mode or not transport_active or not transport_dest_pos then return end
 
     local player_pos = players.get_position(players.user())
@@ -2509,7 +2680,7 @@ util.create_tick_handler(function()
 end)
 
 -- K9 auto-follow when idle
-util.create_tick_handler(function()
+safe_tick_handler("k9_follow", function()
     if not police_mode or not k9_dog or not ENTITY.DOES_ENTITY_EXIST(k9_dog) then return end
 
     local dog_pos = ENTITY.GET_ENTITY_COORDS(k9_dog, true)
@@ -2527,10 +2698,12 @@ end)
 
 local function start_emergency_call()
     if not police_mode then
+        log_warning("start_emergency_call", "Attempted without being on duty")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
         return
     end
     if emergency_active then
+        log_event("EMERGENCY", "Emergency call attempt while already active")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Emergency already in progress!"))
         return
     end
@@ -2615,6 +2788,7 @@ local function fail_emergency()
 end
 
 local function cancel_emergency()
+    log_event("EMERGENCY", "Emergency call cancelled")
     safe_delete(emergency_hostage)
     emergency_hostage = nil
     remove_blip(emergency_blip)
@@ -2629,10 +2803,12 @@ end
 
 local function setup_dui_checkpoint()
     if not police_mode then
+        log_warning("setup_dui_checkpoint", "Attempted without being on duty")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
         return
     end
     if dui_checkpoint_active then
+        log_event("DUI", "Checkpoint setup attempt while already active")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Checkpoint already active!"))
         return
     end
@@ -2651,7 +2827,6 @@ local function setup_dui_checkpoint()
     if MISC.GET_GROUND_Z_FOR_3D_COORD(base_x, base_y, base_z + 10.0, ground, false, false) then
         base_z = memory.read_float(ground)
     end
-    memory.free(ground)
 
     for i = -3, 3 do
         local hash = util.joaat("prop_roadcone01a")
@@ -2661,7 +2836,7 @@ local function setup_dui_checkpoint()
         local obj = OBJECT.CREATE_OBJECT(hash, ox, oy, base_z, true, false, false)
         if obj ~= 0 then
             ENTITY.SET_ENTITY_AS_MISSION_ENTITY(obj, true, true)
-            ENTITY.PLACE_ENTITY_ON_GROUND_PROPERLY(obj, true)
+            place_on_ground(obj)
             ENTITY.FREEZE_ENTITY_POSITION(obj, true)
             table.insert(dui_checkpoint_objects, obj)
         end
@@ -2676,7 +2851,7 @@ local function setup_dui_checkpoint()
         local obj = OBJECT.CREATE_OBJECT(light_hash, ox, oy, base_z, true, false, false)
         if obj ~= 0 then
             ENTITY.SET_ENTITY_AS_MISSION_ENTITY(obj, true, true)
-            ENTITY.PLACE_ENTITY_ON_GROUND_PROPERLY(obj, true)
+            place_on_ground(obj)
             ENTITY.FREEZE_ENTITY_POSITION(obj, true)
             table.insert(dui_checkpoint_objects, obj)
         end
@@ -2694,10 +2869,12 @@ local function setup_dui_checkpoint()
     HUD.SET_BLIP_AS_SHORT_RANGE(dui_checkpoint_blip, true)
 
     radio_message(T("DUI checkpoint established"))
+    log_event("DUI", "DUI checkpoint established")
 end
 
 local function close_dui_checkpoint()
     if not dui_checkpoint_active then return end
+    log_event("DUI", "DUI checkpoint closed | Arrests: " .. dui_arrests)
     for _, obj in ipairs(dui_checkpoint_objects) do
         safe_delete(obj)
     end
@@ -2735,6 +2912,7 @@ local function dui_test_vehicle()
     end
 
     if not best_veh then
+        log_event("DUI", "DUI test failed - no vehicle nearby")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("No vehicle nearby"))
         return
     end
@@ -2765,7 +2943,7 @@ local function dui_test_vehicle()
                 log_event("ARREST", "DUI arrest | Total DUI: " .. dui_arrests)
                 AUDIO.PLAY_SOUND_FRONTEND(-1, "MEDAL_UP", "HUD_MINI_GAME_SOUNDSET", true)
                 local driver_ref = driver
-                util.create_thread(function()
+                safe_thread("dui_arrest_cleanup", function()
                     util.yield(5000)
                     if ENTITY.DOES_ENTITY_EXIST(driver_ref) then
                         for alpha = 240, 0, -30 do
@@ -2778,6 +2956,7 @@ local function dui_test_vehicle()
                 end)
             end
         else
+            log_event("DUI", "Driver tested sober, released")
             radio_message(T("Driver is sober. Released."))
             util.yield(2000)
             if ENTITY.DOES_ENTITY_EXIST(driver) and ENTITY.DOES_ENTITY_EXIST(best_veh) then
@@ -2794,6 +2973,7 @@ end
 
 local function search_suspect()
     if not police_mode then
+        log_warning("search_suspect", "Attempted without being on duty")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
         return
     end
@@ -2821,6 +3001,7 @@ local function search_suspect()
     end
 
     if not nearest_ped then
+        log_event("SEARCH", "Suspect search failed - no one nearby")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("No one nearby to search"))
         return
     end
@@ -2846,7 +3027,7 @@ local function search_suspect()
         add_rank_points(2)
         AUDIO.PLAY_SOUND_FRONTEND(-1, "MEDAL_UP", "HUD_MINI_GAME_SOUNDSET", true)
         local ped_ref = nearest_ped
-        util.create_thread(function()
+        safe_thread("search_arrest_cleanup", function()
             util.yield(5000)
             if ENTITY.DOES_ENTITY_EXIST(ped_ref) then
                 for alpha = 240, 0, -30 do
@@ -2858,6 +3039,7 @@ local function search_suspect()
             end
         end)
     else
+        log_event("SEARCH", "Nothing found on suspect, released")
         radio_message(T("Nothing found. Suspect released."))
         if ENTITY.DOES_ENTITY_EXIST(nearest_ped) then
             TASK.CLEAR_PED_TASKS_IMMEDIATELY(nearest_ped)
@@ -2870,10 +3052,12 @@ end
 
 local function start_escort_mission()
     if not police_mode then
+        log_warning("start_escort_mission", "Attempted without being on duty")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
         return
     end
     if escort_active then
+        log_event("ESCORT", "Escort attempt while already active")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Escort already in progress!"))
         return
     end
@@ -2897,6 +3081,7 @@ local function start_escort_mission()
         STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(vip_veh_hash)
         STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(vip_ped_hash)
         STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(driver_hash)
+        log_error("start_escort_mission", "Escort vehicle spawn failed")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Escort vehicle spawn failed!"))
         return
     end
@@ -2990,6 +3175,7 @@ local function complete_escort()
 end
 
 local function cancel_escort()
+    log_event("ESCORT", "Escort mission cancelled")
     for _, a in ipairs(escort_attackers) do
         safe_delete(a.ped)
         safe_delete(a.vehicle)
@@ -3011,6 +3197,7 @@ end
 
 local function spawn_police_boat()
     if not police_mode then
+        log_warning("spawn_police_boat", "Attempted without being on duty")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
         return
     end
@@ -3032,6 +3219,7 @@ local function spawn_police_boat()
     if police_boat == 0 then
         police_boat = nil
         STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(boat_hash)
+        log_error("spawn_police_boat", "Boat spawn failed")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Boat spawn failed! Try near water."))
         return
     end
@@ -3046,6 +3234,7 @@ local function spawn_police_boat()
 end
 
 local function delete_police_boat()
+    log_event("VEHICLE", "Police boat removed")
     safe_delete(police_boat)
     police_boat = nil
     radio_message(T("Police boat removed"))
@@ -3059,11 +3248,12 @@ local function toggle_siren()
 
     siren_on = not siren_on
     VEHICLE.SET_VEHICLE_SIREN(patrol_vehicle, siren_on)
+    log_event("VEHICLE", "Siren toggled: " .. (siren_on and "ON" or "OFF"))
     util.toast("[" .. T("Police Simulator") .. "] " .. (siren_on and T("Siren ON") or T("Siren OFF")))
 end
 
 -- Emergency call timer tick handler
-util.create_tick_handler(function()
+safe_tick_handler("emergency_timer", function()
     if not police_mode or not emergency_active then return end
 
     local elapsed = os.time() - emergency_timer
@@ -3092,7 +3282,7 @@ util.create_tick_handler(function()
 end)
 
 -- DUI checkpoint vehicle slowdown
-util.create_tick_handler(function()
+safe_tick_handler("dui_checkpoint", function()
     if not police_mode or not dui_checkpoint_active or not dui_checkpoint_pos then return end
 
     local cp = dui_checkpoint_pos
@@ -3119,10 +3309,11 @@ util.create_tick_handler(function()
 end)
 
 -- Escort mission tracking
-util.create_tick_handler(function()
+safe_tick_handler("escort_tracking", function()
     if not police_mode or not escort_active then return end
 
     if not escort_vehicle or not ENTITY.DOES_ENTITY_EXIST(escort_vehicle) then
+        log_event("ESCORT", "VIP vehicle destroyed - mission failed")
         radio_message(T("VIP vehicle destroyed! Mission failed!"))
         cancel_escort()
         return
@@ -3192,7 +3383,7 @@ util.create_tick_handler(function()
     end
 end)
 
-util.create_tick_handler(function()
+safe_tick_handler("debug_display", function()
     if not show_debug or not police_mode then return end
 
     util.draw_debug_text("")
@@ -3302,12 +3493,12 @@ local DUTY_MENU = menu.list(ROOT, T("Duty"), {"psduty"}, T("Start or end police 
 reg(DUTY_MENU, ROOT, function() return T("Duty") end, function() return T("Start or end police duty.") end)
 
 ref = menu.action(DUTY_MENU, T("Start Duty"), {"psstart"}, T("Change into police uniform and receive weapons."), function()
-    start_police_mode()
+    safe_call("Start Duty", start_police_mode)
 end)
 reg(ref, DUTY_MENU, function() return T("Start Duty") end, function() return T("Change into police uniform and receive weapons.") end)
 
 ref = menu.action(DUTY_MENU, T("End Duty"), {"psstop"}, T("End police mode and return to original character."), function()
-    stop_police_mode()
+    safe_call("End Duty", stop_police_mode)
 end)
 reg(ref, DUTY_MENU, function() return T("End Duty") end, function() return T("End police mode and return to original character.") end)
 
@@ -3317,6 +3508,7 @@ reg(ref, DUTY_MENU, function() return T("Select Uniform") end)
 for i, model in ipairs(POLICE_MODELS) do
     ref = menu.action(DUTY_MENU, T(model.name), {}, T("Uniform") .. ": " .. T(model.name), function()
         selected_model_idx = i
+        log_event("SETTING", "Uniform selected: " .. model.name)
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Uniform selected") .. ": " .. T(model.name))
         if police_mode then
             local hash = util.joaat(model.hash)
@@ -3350,7 +3542,7 @@ local VEHICLE_MENU = menu.list(ROOT, T("Patrol Vehicle"), {"psvehicle"}, T("Spaw
 reg(VEHICLE_MENU, ROOT, function() return T("Patrol Vehicle") end, function() return T("Spawn and manage patrol vehicles.") end)
 
 ref = menu.action(VEHICLE_MENU, T("Spawn Patrol Vehicle"), {"psspawn"}, T("Spawn selected patrol vehicle."), function()
-    spawn_patrol_vehicle()
+    safe_call("Spawn Patrol Vehicle", spawn_patrol_vehicle)
 end)
 reg(ref, VEHICLE_MENU, function() return T("Spawn Patrol Vehicle") end, function() return T("Spawn selected patrol vehicle.") end)
 
@@ -3364,7 +3556,7 @@ end)
 reg(ref, VEHICLE_MENU, function() return T("Enter Patrol Vehicle") end, function() return T("Enter the patrol vehicle.") end)
 
 ref = menu.action(VEHICLE_MENU, T("Toggle Siren"), {"pssiren"}, T("Toggle patrol vehicle siren."), function()
-    toggle_siren()
+    safe_call("Toggle Siren", toggle_siren)
 end)
 reg(ref, VEHICLE_MENU, function() return T("Toggle Siren") end, function() return T("Toggle patrol vehicle siren.") end)
 
@@ -3375,6 +3567,7 @@ ref = menu.action(VEHICLE_MENU, T("Repair Patrol Vehicle"), {"psrepair"}, T("Rep
     end
     VEHICLE.SET_VEHICLE_FIXED(patrol_vehicle)
     VEHICLE.SET_VEHICLE_DIRT_LEVEL(patrol_vehicle, 0.0)
+    log_event("VEHICLE", "Patrol vehicle repaired")
     util.toast("[" .. T("Police Simulator") .. "] " .. T("Patrol vehicle repaired!"))
 end)
 reg(ref, VEHICLE_MENU, function() return T("Repair Patrol Vehicle") end, function() return T("Repair the patrol vehicle.") end)
@@ -3391,6 +3584,7 @@ ref = menu.action(VEHICLE_MENU, T("Delete Patrol Vehicle"), {"psdelete"}, T("Del
         patrol_partner = nil
         safe_delete(patrol_vehicle)
         patrol_vehicle = nil
+        log_event("VEHICLE", "Patrol vehicle deleted")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Patrol vehicle deleted"))
     end
 end)
@@ -3402,6 +3596,7 @@ reg(ref, VEHICLE_MENU, function() return T("Select Vehicle") end)
 for i, veh in ipairs(PATROL_VEHICLES) do
     ref = menu.action(VEHICLE_MENU, T(veh.name), {}, T("Patrol Vehicle") .. ": " .. T(veh.name), function()
         selected_vehicle_idx = i
+        log_event("SETTING", "Vehicle selected: " .. veh.name)
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Vehicle selected") .. ": " .. T(veh.name))
     end)
     reg(ref, VEHICLE_MENU, function() return T(veh.name) end, function() return T("Patrol Vehicle") .. ": " .. T(veh.name) end)
@@ -3412,15 +3607,17 @@ reg(CRIME_MENU, ROOT, function() return T("Crime Response") end, function() retu
 
 ref = menu.action(CRIME_MENU, T("Trigger Crime Event"), {"pscrimevent"}, T("Trigger a random crime event."), function()
     if not police_mode then
+        log_warning("Trigger Crime Event", "Attempted without being on duty")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
         return
     end
-    generate_crime_event()
+    safe_call("Trigger Crime Event", generate_crime_event)
 end)
 reg(ref, CRIME_MENU, function() return T("Trigger Crime Event") end, function() return T("Trigger a random crime event.") end)
 
 ref = menu.action(CRIME_MENU, T("Arrest Nearest Criminal"), {"psarrest"}, T("Arrest the nearest criminal."), function()
     if not police_mode then
+        log_warning("Arrest", "Attempted without being on duty")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
         return
     end
@@ -3429,12 +3626,13 @@ ref = menu.action(CRIME_MENU, T("Arrest Nearest Criminal"), {"psarrest"}, T("Arr
         util.toast("[" .. T("Police Simulator") .. "] " .. T("No criminals nearby."))
         return
     end
-    arrest_criminal(closest)
+    safe_call("Arrest Criminal", arrest_criminal, closest)
 end)
 reg(ref, CRIME_MENU, function() return T("Arrest Nearest Criminal") end, function() return T("Arrest the nearest criminal.") end)
 
 ref = menu.action(CRIME_MENU, T("Chase Nearest Criminal"), {"pschase"}, T("Chase the nearest criminal."), function()
     if not police_mode then
+        log_warning("Chase", "Attempted without being on duty")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
         return
     end
@@ -3443,12 +3641,12 @@ ref = menu.action(CRIME_MENU, T("Chase Nearest Criminal"), {"pschase"}, T("Chase
         util.toast("[" .. T("Police Simulator") .. "] " .. T("No criminals to chase."))
         return
     end
-    start_chase(closest)
+    safe_call("Chase Criminal", start_chase, closest)
 end)
 reg(ref, CRIME_MENU, function() return T("Chase Nearest Criminal") end, function() return T("Chase the nearest criminal.") end)
 
 ref = menu.action(CRIME_MENU, T("Stop Chase"), {"pschasestop"}, T("Stop current chase."), function()
-    stop_chase()
+    safe_call("Stop Chase", stop_chase)
 end)
 reg(ref, CRIME_MENU, function() return T("Stop Chase") end, function() return T("Stop current chase.") end)
 
@@ -3461,6 +3659,7 @@ ref = menu.action(CRIME_MENU, T("Remove All Criminals"), {"psclearcrim"}, T("Rem
     criminals = {}
     chase_active = false
     chase_target = nil
+    log_event("CRIME", "All criminals removed")
     util.toast("[" .. T("Police Simulator") .. "] " .. T("All criminals removed"))
 end)
 reg(ref, CRIME_MENU, function() return T("Remove All Criminals") end, function() return T("Remove all criminals.") end)
@@ -3470,15 +3669,16 @@ reg(WAVE_MENU, ROOT, function() return T("Wave Mode") end, function() return T("
 
 ref = menu.action(WAVE_MENU, T("Start Wave"), {"pswavestart"}, T("Start continuous crime waves.") .. "\n" .. T("Criminal count increases each wave."), function()
     if not police_mode then
+        log_warning("Start Wave", "Attempted without being on duty")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
         return
     end
-    start_wave_mode()
+    safe_call("Start Wave", start_wave_mode)
 end)
 reg(ref, WAVE_MENU, function() return T("Start Wave") end, function() return T("Start continuous crime waves.") .. "\n" .. T("Criminal count increases each wave.") end)
 
 ref = menu.action(WAVE_MENU, T("Stop Wave"), {"pswavestop"}, T("Stop wave mode."), function()
-    stop_wave_mode()
+    safe_call("Stop Wave", stop_wave_mode)
 end)
 reg(ref, WAVE_MENU, function() return T("Stop Wave") end, function() return T("Stop wave mode.") end)
 
@@ -3493,37 +3693,37 @@ local TACTICAL_MENU = menu.list(ROOT, T("Tactical"), {"pstactical"}, T("Tactical
 reg(TACTICAL_MENU, ROOT, function() return T("Tactical") end, function() return T("Tactical equipment and actions.") end)
 
 ref = menu.action(TACTICAL_MENU, T("Deploy Spike Strip"), {"psspike"}, T("Deploy a spike strip to burst tires."), function()
-    deploy_spike_strip()
+    safe_call("Deploy Spike Strip", deploy_spike_strip)
 end)
 reg(ref, TACTICAL_MENU, function() return T("Deploy Spike Strip") end, function() return T("Deploy a spike strip to burst tires.") end)
 
 ref = menu.action(TACTICAL_MENU, T("Clear Spike Strips"), {"psclearspike"}, T("Remove all deployed spike strips."), function()
-    clear_spike_strips()
+    safe_call("Clear Spike Strips", clear_spike_strips)
 end)
 reg(ref, TACTICAL_MENU, function() return T("Clear Spike Strips") end, function() return T("Remove all deployed spike strips.") end)
 
 ref = menu.action(TACTICAL_MENU, T("Deploy Roadblock"), {"psroadblock"}, T("Set up a police roadblock ahead."), function()
-    deploy_roadblock()
+    safe_call("Deploy Roadblock", deploy_roadblock)
 end)
 reg(ref, TACTICAL_MENU, function() return T("Deploy Roadblock") end, function() return T("Set up a police roadblock ahead.") end)
 
 ref = menu.action(TACTICAL_MENU, T("Clear Roadblocks"), {"psclearblock"}, T("Remove all roadblocks."), function()
-    clear_roadblocks()
+    safe_call("Clear Roadblocks", clear_roadblocks)
 end)
 reg(ref, TACTICAL_MENU, function() return T("Clear Roadblocks") end, function() return T("Remove all roadblocks.") end)
 
 ref = menu.action(TACTICAL_MENU, T("Flashbang"), {"psflash"}, T("Throw flashbang to stun nearby criminals."), function()
-    throw_flashbang()
+    safe_call("Flashbang", throw_flashbang)
 end)
 reg(ref, TACTICAL_MENU, function() return T("Flashbang") end, function() return T("Throw flashbang to stun nearby criminals.") end)
 
 ref = menu.action(TACTICAL_MENU, T("Warning Shot"), {"pswarning"}, T("Fire warning shot to intimidate criminals."), function()
-    fire_warning_shot()
+    safe_call("Warning Shot", fire_warning_shot)
 end)
 reg(ref, TACTICAL_MENU, function() return T("Warning Shot") end, function() return T("Fire warning shot to intimidate criminals.") end)
 
 ref = menu.action(TACTICAL_MENU, T("Smoke Grenade"), {"pssmoke"}, T("Deploy smoke grenade to blind criminals."), function()
-    throw_smoke_grenade()
+    safe_call("Smoke Grenade", throw_smoke_grenade)
 end)
 reg(ref, TACTICAL_MENU, function() return T("Smoke Grenade") end, function() return T("Deploy smoke grenade to blind criminals.") end)
 
@@ -3533,12 +3733,12 @@ local BACKUP_MENU = menu.list(ROOT, T("Backup & Support"), {"psbackup"}, T("Requ
 reg(BACKUP_MENU, ROOT, function() return T("Backup & Support") end, function() return T("Request backup and air support.") end)
 
 ref = menu.action(BACKUP_MENU, T("Request Backup"), {"psreqbackup"}, T("Call in a police backup unit."), function()
-    request_backup()
+    safe_call("Request Backup", request_backup)
 end)
 reg(ref, BACKUP_MENU, function() return T("Request Backup") end, function() return T("Call in a police backup unit.") end)
 
 ref = menu.action(BACKUP_MENU, T("Dismiss Backup"), {"psdismissbackup"}, T("Dismiss all backup units."), function()
-    dismiss_backup()
+    safe_call("Dismiss Backup", dismiss_backup)
 end)
 reg(ref, BACKUP_MENU, function() return T("Dismiss Backup") end, function() return T("Dismiss all backup units.") end)
 
@@ -3551,12 +3751,12 @@ ref = menu.divider(BACKUP_MENU, T("Air Support"))
 reg(ref, BACKUP_MENU, function() return T("Air Support") end)
 
 ref = menu.action(BACKUP_MENU, T("Deploy Helicopter"), {"psheli"}, T("Call in police helicopter for air support."), function()
-    deploy_helicopter()
+    safe_call("Deploy Helicopter", deploy_helicopter)
 end)
 reg(ref, BACKUP_MENU, function() return T("Deploy Helicopter") end, function() return T("Call in police helicopter for air support.") end)
 
 ref = menu.action(BACKUP_MENU, T("Dismiss Helicopter"), {"psdismissheli"}, T("Dismiss the police helicopter."), function()
-    dismiss_helicopter()
+    safe_call("Dismiss Helicopter", dismiss_helicopter)
 end)
 reg(ref, BACKUP_MENU, function() return T("Dismiss Helicopter") end, function() return T("Dismiss the police helicopter.") end)
 
@@ -3566,7 +3766,7 @@ local TRAFFIC_MENU = menu.list(ROOT, T("Traffic Stop"), {"pstraffic"}, T("Perfor
 reg(TRAFFIC_MENU, ROOT, function() return T("Traffic Stop") end, function() return T("Perform traffic stops on vehicles.") end)
 
 ref = menu.action(TRAFFIC_MENU, T("Initiate Traffic Stop"), {"pspullover"}, T("Pull over the vehicle ahead."), function()
-    initiate_traffic_stop()
+    safe_call("Initiate Traffic Stop", initiate_traffic_stop)
 end)
 reg(ref, TRAFFIC_MENU, function() return T("Initiate Traffic Stop") end, function() return T("Pull over the vehicle ahead.") end)
 
@@ -3586,12 +3786,12 @@ local BOUNTY_MENU = menu.list(ROOT, T("Bounty Board"), {"psbounty"}, T("Track an
 reg(BOUNTY_MENU, ROOT, function() return T("Bounty Board") end, function() return T("Track and eliminate high-value targets.") end)
 
 ref = menu.action(BOUNTY_MENU, T("Generate Bounty"), {"psnewbounty"}, T("Create a new most-wanted target."), function()
-    generate_bounty()
+    safe_call("Generate Bounty", generate_bounty)
 end)
 reg(ref, BOUNTY_MENU, function() return T("Generate Bounty") end, function() return T("Create a new most-wanted target.") end)
 
 ref = menu.action(BOUNTY_MENU, T("Clear All Bounties"), {"psclearbounty"}, T("Remove all bounty targets."), function()
-    clear_bounties()
+    safe_call("Clear All Bounties", clear_bounties)
 end)
 reg(ref, BOUNTY_MENU, function() return T("Clear All Bounties") end, function() return T("Remove all bounty targets.") end)
 
@@ -3620,22 +3820,22 @@ local K9_MENU = menu.list(ROOT, T("K9 Unit"), {"psk9"}, T("Police dog companion.
 reg(K9_MENU, ROOT, function() return T("K9 Unit") end, function() return T("Police dog companion.") end)
 
 ref = menu.action(K9_MENU, T("Deploy K9"), {"psk9deploy"}, T("Deploy police K9 unit."), function()
-    deploy_k9()
+    safe_call("Deploy K9", deploy_k9)
 end)
 reg(ref, K9_MENU, function() return T("Deploy K9") end, function() return T("Deploy police K9 unit.") end)
 
 ref = menu.action(K9_MENU, T("Dismiss K9"), {"psk9dismiss"}, T("Dismiss the K9 unit."), function()
-    dismiss_k9()
+    safe_call("Dismiss K9", dismiss_k9)
 end)
 reg(ref, K9_MENU, function() return T("Dismiss K9") end, function() return T("Dismiss the K9 unit.") end)
 
 ref = menu.action(K9_MENU, T("K9 Attack"), {"psk9attack"}, T("Command K9 to attack nearest criminal."), function()
-    k9_attack_nearest()
+    safe_call("K9 Attack", k9_attack_nearest)
 end)
 reg(ref, K9_MENU, function() return T("K9 Attack") end, function() return T("Command K9 to attack nearest criminal.") end)
 
 ref = menu.action(K9_MENU, T("K9 Follow"), {"psk9follow"}, T("Command K9 to follow you."), function()
-    k9_follow()
+    safe_call("K9 Follow", k9_follow)
 end)
 reg(ref, K9_MENU, function() return T("K9 Follow") end, function() return T("Command K9 to follow you.") end)
 
@@ -3645,12 +3845,12 @@ local SWAT_MENU = menu.list(ROOT, T("SWAT Raid"), {"psswat"}, T("Deploy SWAT tac
 reg(SWAT_MENU, ROOT, function() return T("SWAT Raid") end, function() return T("Deploy SWAT tactical team.") end)
 
 ref = menu.action(SWAT_MENU, T("Call SWAT"), {"pscallswat"}, T("Deploy SWAT team with tactical vehicle."), function()
-    call_swat()
+    safe_call("Call SWAT", call_swat)
 end)
 reg(ref, SWAT_MENU, function() return T("Call SWAT") end, function() return T("Deploy SWAT team with tactical vehicle.") end)
 
 ref = menu.action(SWAT_MENU, T("Dismiss SWAT"), {"psdismissswat"}, T("Dismiss the SWAT team."), function()
-    dismiss_swat()
+    safe_call("Dismiss SWAT", dismiss_swat)
 end)
 reg(ref, SWAT_MENU, function() return T("Dismiss SWAT") end, function() return T("Dismiss the SWAT team.") end)
 
@@ -3665,12 +3865,12 @@ local UNDERCOVER_MENU = menu.list(ROOT, T("Undercover"), {"psundercover"}, T("Un
 reg(UNDERCOVER_MENU, ROOT, function() return T("Undercover") end, function() return T("Undercover operations.") end)
 
 ref = menu.action(UNDERCOVER_MENU, T("Toggle Undercover"), {"psundercovermode"}, T("Switch between uniform and civilian clothes."), function()
-    toggle_undercover()
+    safe_call("Toggle Undercover", toggle_undercover)
 end)
 reg(ref, UNDERCOVER_MENU, function() return T("Toggle Undercover") end, function() return T("Switch between uniform and civilian clothes.") end)
 
 ref = menu.action(UNDERCOVER_MENU, T("Spawn Undercover Vehicle"), {"psundercoverveh"}, T("Spawn a random civilian vehicle."), function()
-    spawn_undercover_vehicle()
+    safe_call("Spawn Undercover Vehicle", spawn_undercover_vehicle)
 end)
 reg(ref, UNDERCOVER_MENU, function() return T("Spawn Undercover Vehicle") end, function() return T("Spawn a random civilian vehicle.") end)
 
@@ -3680,7 +3880,7 @@ local SPEEDTRAP_MENU = menu.list(ROOT, T("Speed Trap"), {"psspeedtrap"}, T("Set 
 reg(SPEEDTRAP_MENU, ROOT, function() return T("Speed Trap") end, function() return T("Set up speed enforcement.") end)
 
 ref = menu.action(SPEEDTRAP_MENU, T("Toggle Speed Trap"), {"psspeedtrapset"}, T("Activate or deactivate speed trap at current position."), function()
-    toggle_speed_trap()
+    safe_call("Toggle Speed Trap", toggle_speed_trap)
 end)
 reg(ref, SPEEDTRAP_MENU, function() return T("Toggle Speed Trap") end, function() return T("Activate or deactivate speed trap at current position.") end)
 
@@ -3695,12 +3895,12 @@ local TRANSPORT_MENU = menu.list(ROOT, T("Prisoner Transport"), {"pstransport"},
 reg(TRANSPORT_MENU, ROOT, function() return T("Prisoner Transport") end, function() return T("Transport arrested prisoners for bonus points.") end)
 
 ref = menu.action(TRANSPORT_MENU, T("Start Transport"), {"pstransportstart"}, T("Load prisoners and start transport mission."), function()
-    start_prisoner_transport()
+    safe_call("Start Transport", start_prisoner_transport)
 end)
 reg(ref, TRANSPORT_MENU, function() return T("Start Transport") end, function() return T("Load prisoners and start transport mission.") end)
 
 ref = menu.action(TRANSPORT_MENU, T("Cancel Transport"), {"pstransportcancel"}, T("Cancel current transport mission."), function()
-    cancel_transport()
+    safe_call("Cancel Transport", cancel_transport)
 end)
 reg(ref, TRANSPORT_MENU, function() return T("Cancel Transport") end, function() return T("Cancel current transport mission.") end)
 
@@ -3710,12 +3910,12 @@ local EMERGENCY_MENU = menu.list(ROOT, T("Emergency Call"), {"psemergency"}, T("
 reg(EMERGENCY_MENU, ROOT, function() return T("Emergency Call") end, function() return T("Respond to urgent emergency calls.") end)
 
 ref = menu.action(EMERGENCY_MENU, T("Receive Emergency"), {"psemergencycall"}, T("Receive a random emergency call."), function()
-    start_emergency_call()
+    safe_call("Receive Emergency", start_emergency_call)
 end)
 reg(ref, EMERGENCY_MENU, function() return T("Receive Emergency") end, function() return T("Receive a random emergency call.") end)
 
 ref = menu.action(EMERGENCY_MENU, T("Cancel Emergency"), {"psemergencycancel"}, T("Cancel current emergency."), function()
-    cancel_emergency()
+    safe_call("Cancel Emergency", cancel_emergency)
 end)
 reg(ref, EMERGENCY_MENU, function() return T("Cancel Emergency") end, function() return T("Cancel current emergency.") end)
 
@@ -3725,24 +3925,24 @@ local DUI_MENU = menu.list(ROOT, T("DUI Checkpoint"), {"psdui"}, T("Set up sobri
 reg(DUI_MENU, ROOT, function() return T("DUI Checkpoint") end, function() return T("Set up sobriety checkpoints.") end)
 
 ref = menu.action(DUI_MENU, T("Setup Checkpoint"), {"psduisetup"}, T("Set up a DUI checkpoint at current position."), function()
-    setup_dui_checkpoint()
+    safe_call("Setup DUI Checkpoint", setup_dui_checkpoint)
 end)
 reg(ref, DUI_MENU, function() return T("Setup Checkpoint") end, function() return T("Set up a DUI checkpoint at current position.") end)
 
 ref = menu.action(DUI_MENU, T("Test Vehicle"), {"psduitest"}, T("Test nearest vehicle driver for DUI."), function()
-    dui_test_vehicle()
+    safe_call("DUI Test Vehicle", dui_test_vehicle)
 end)
 reg(ref, DUI_MENU, function() return T("Test Vehicle") end, function() return T("Test nearest vehicle driver for DUI.") end)
 
 ref = menu.action(DUI_MENU, T("Close Checkpoint"), {"psduiclose"}, T("Close the DUI checkpoint."), function()
-    close_dui_checkpoint()
+    safe_call("Close DUI Checkpoint", close_dui_checkpoint)
 end)
 reg(ref, DUI_MENU, function() return T("Close Checkpoint") end, function() return T("Close the DUI checkpoint.") end)
 
 -- ==================== SUSPECT SEARCH ====================
 
 ref = menu.action(ROOT, T("Search Suspect"), {"pssearch"}, T("Search the nearest person for contraband."), function()
-    search_suspect()
+    safe_call("Search Suspect", search_suspect)
 end)
 reg(ref, ROOT, function() return T("Search Suspect") end, function() return T("Search the nearest person for contraband.") end)
 
@@ -3752,12 +3952,12 @@ local ESCORT_MENU = menu.list(ROOT, T("Escort Mission"), {"psescort"}, T("VIP pr
 reg(ESCORT_MENU, ROOT, function() return T("Escort Mission") end, function() return T("VIP protection escort missions.") end)
 
 ref = menu.action(ESCORT_MENU, T("Start Escort"), {"psescortstart"}, T("Start a VIP escort mission."), function()
-    start_escort_mission()
+    safe_call("Start Escort", start_escort_mission)
 end)
 reg(ref, ESCORT_MENU, function() return T("Start Escort") end, function() return T("Start a VIP escort mission.") end)
 
 ref = menu.action(ESCORT_MENU, T("Cancel Escort"), {"psescortcancel"}, T("Cancel the escort mission."), function()
-    cancel_escort()
+    safe_call("Cancel Escort", cancel_escort)
 end)
 reg(ref, ESCORT_MENU, function() return T("Cancel Escort") end, function() return T("Cancel the escort mission.") end)
 
@@ -3767,7 +3967,7 @@ local BOAT_MENU = menu.list(ROOT, T("Police Boat"), {"psboat"}, T("Water patrol 
 reg(BOAT_MENU, ROOT, function() return T("Police Boat") end, function() return T("Water patrol with police boat.") end)
 
 ref = menu.action(BOAT_MENU, T("Spawn Police Boat"), {"psboatspawn"}, T("Spawn a police patrol boat."), function()
-    spawn_police_boat()
+    safe_call("Spawn Police Boat", spawn_police_boat)
 end)
 reg(ref, BOAT_MENU, function() return T("Spawn Police Boat") end, function() return T("Spawn a police patrol boat.") end)
 
@@ -3781,7 +3981,7 @@ end)
 reg(ref, BOAT_MENU, function() return T("Enter Boat") end, function() return T("Enter the police boat.") end)
 
 ref = menu.action(BOAT_MENU, T("Delete Boat"), {"psboatdelete"}, T("Delete the police boat."), function()
-    delete_police_boat()
+    safe_call("Delete Boat", delete_police_boat)
 end)
 reg(ref, BOAT_MENU, function() return T("Delete Boat") end, function() return T("Delete the police boat.") end)
 
@@ -3800,6 +4000,7 @@ local DIFF_MENU = ref
 for i, preset in ipairs(DIFFICULTY_PRESETS) do
     ref = menu.action(DIFF_MENU, T(preset.name), {}, T("Accuracy") .. ": " .. preset.accuracy .. "% | " .. T("Health") .. ": x" .. preset.health, function()
         apply_difficulty(i)
+        log_event("SETTING", "Difficulty changed to: " .. preset.name)
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Difficulty") .. ": " .. T(preset.name))
     end)
     reg(ref, DIFF_MENU, function() return T(DIFFICULTY_PRESETS[i].name) end, function() return T("Accuracy") .. ": " .. DIFFICULTY_PRESETS[i].accuracy .. "% | " .. T("Health") .. ": x" .. DIFFICULTY_PRESETS[i].health end)
@@ -3848,6 +4049,7 @@ reg(ref, SETTINGS_MENU, function() return T("Player Settings") end)
 
 ref = menu.toggle(SETTINGS_MENU, T("Player Invincible"), {"psinvincible"}, T("Make player invincible during duty."), function(on)
     player_invincible = on
+    log_event("SETTING", "Player Invincible: " .. tostring(on))
     if police_mode then
         menu.set_value(godmode_ref, on)
     end
@@ -3856,11 +4058,13 @@ reg(ref, SETTINGS_MENU, function() return T("Player Invincible") end, function()
 
 ref = menu.toggle(SETTINGS_MENU, T("Auto Heal"), {"psautoheal"}, T("Slowly regenerate health during duty."), function(on)
     auto_heal = on
+    log_event("SETTING", "Auto Heal: " .. tostring(on))
 end, false)
 reg(ref, SETTINGS_MENU, function() return T("Auto Heal") end, function() return T("Slowly regenerate health during duty.") end)
 
 ref = menu.toggle(SETTINGS_MENU, T("Clear Wanted Level"), {"psclearwanted"}, T("Automatically clear wanted level during duty."), function(on)
     clear_wanted = on
+    log_event("SETTING", "Clear Wanted Level: " .. tostring(on))
 end, true)
 reg(ref, SETTINGS_MENU, function() return T("Clear Wanted Level") end, function() return T("Automatically clear wanted level during duty.") end)
 
@@ -3869,6 +4073,7 @@ reg(ref, SETTINGS_MENU, function() return T("Vehicle & Partner") end)
 
 ref = menu.toggle(SETTINGS_MENU, T("Vehicle Invincible"), {"psvehicleinv"}, T("Make patrol vehicle invincible."), function(on)
     vehicle_invincible = on
+    log_event("SETTING", "Vehicle Invincible: " .. tostring(on))
     if patrol_vehicle and ENTITY.DOES_ENTITY_EXIST(patrol_vehicle) then
         ENTITY.SET_ENTITY_INVINCIBLE(patrol_vehicle, on)
     end
@@ -3877,6 +4082,7 @@ reg(ref, SETTINGS_MENU, function() return T("Vehicle Invincible") end, function(
 
 ref = menu.toggle(SETTINGS_MENU, T("Partner Escort"), {"pspartner"}, T("Partner NPC joins when spawning patrol vehicle."), function(on)
     partner_enabled = on
+    log_event("SETTING", "Partner Escort: " .. tostring(on))
 end, true)
 reg(ref, SETTINGS_MENU, function() return T("Partner Escort") end, function() return T("Partner NPC joins when spawning patrol vehicle.") end)
 
@@ -3886,6 +4092,7 @@ reg(PARTNER_WPN_MENU, SETTINGS_MENU, function() return T("Partner Weapon") end, 
 for i, pw in ipairs(PARTNER_WEAPONS) do
     ref = menu.action(PARTNER_WPN_MENU, T(pw.name), {}, "", function()
         partner_weapon_idx = i
+        log_event("SETTING", "Partner weapon changed to: " .. pw.name)
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Partner Weapon") .. ": " .. T(pw.name))
     end)
     reg(ref, PARTNER_WPN_MENU, function() return T(pw.name) end)
@@ -3896,21 +4103,25 @@ reg(ref, SETTINGS_MENU, function() return T("Feature Toggles") end)
 
 ref = menu.toggle(SETTINGS_MENU, T("Auto Crime Detection"), {"psautodetect"}, T("Periodically auto-generate crime events."), function(on)
     auto_detect_crime = on
+    log_event("SETTING", "Auto Crime Detection: " .. tostring(on))
 end, true)
 reg(ref, SETTINGS_MENU, function() return T("Auto Crime Detection") end, function() return T("Periodically auto-generate crime events.") end)
 
 ref = menu.toggle(SETTINGS_MENU, T("Radio Alerts"), {"psradio"}, T("Show radio alerts for crime events."), function(on)
     radio_enabled = on
+    log_event("SETTING", "Radio Alerts: " .. tostring(on))
 end, true)
 reg(ref, SETTINGS_MENU, function() return T("Radio Alerts") end, function() return T("Show radio alerts for crime events.") end)
 
 ref = menu.toggle(SETTINGS_MENU, T("Minimap Blips"), {"psblips"}, T("Show criminal blips on minimap."), function(on)
     show_minimap_blips = on
+    log_event("SETTING", "Minimap Blips: " .. tostring(on))
 end, true)
 reg(ref, SETTINGS_MENU, function() return T("Minimap Blips") end, function() return T("Show criminal blips on minimap.") end)
 
 ref = menu.toggle(SETTINGS_MENU, T("Debug Info"), {"psdebug"}, T("Show debug info on screen."), function(on)
     show_debug = on
+    log_event("SETTING", "Debug Info: " .. tostring(on))
 end, true)
 reg(ref, SETTINGS_MENU, function() return T("Debug Info") end, function() return T("Show debug info on screen.") end)
 
