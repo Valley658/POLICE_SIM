@@ -1,6 +1,6 @@
 -- POLICE_SIM.pluto
 
-local SCRIPT_VERSION = "1.8.0"
+local SCRIPT_VERSION = "1.8.1"
 
 if not util then
     error("This script must be run inside the Stand environment.")
@@ -420,6 +420,7 @@ end
 
 local police_mode = false
 local original_player_ped = nil
+local police_ped_handle = nil -- track police ped globally for reliable cleanup
 local original_ped_stash_pos = {x = 0.0, y = 0.0, z = -200.0}
 local patrol_vehicle = nil
 local patrol_partner = nil
@@ -730,6 +731,7 @@ local function start_police_mode()
     PED.SET_PED_CONFIG_FLAG(police_ped, 35, false)
     ENTITY.SET_ENTITY_AS_MISSION_ENTITY(original_player_ped, true, true)
 
+    police_ped_handle = police_ped -- store globally for cleanup
     PLAYER.CHANGE_PLAYER_PED(players.user(), police_ped, false, false)
     util.yield(1000)
 
@@ -889,12 +891,12 @@ local function stop_police_mode()
     gps_tracking_target = nil
     gps_tracking_active = false
 
-    local police_ped = players.user_ped()
+    local police_ped = police_ped_handle or players.user_ped()
     local current_pos = players.get_position(players.user())
     local heading = ENTITY.GET_ENTITY_HEADING(police_ped)
 
     -- Remove police ped from vehicle before switching to prevent NPC driving
-    if PED.IS_PED_IN_ANY_VEHICLE(police_ped, false) then
+    if ENTITY.DOES_ENTITY_EXIST(police_ped) and PED.IS_PED_IN_ANY_VEHICLE(police_ped, false) then
         local cur_veh = PED.GET_VEHICLE_PED_IS_IN(police_ped, false)
         TASK.CLEAR_PED_TASKS_IMMEDIATELY(police_ped)
         TASK.TASK_LEAVE_VEHICLE(police_ped, cur_veh, 16) -- 16 = teleport out instantly
@@ -902,10 +904,12 @@ local function stop_police_mode()
     end
 
     -- Freeze police ped to prevent AI actions during transition
-    ENTITY.FREEZE_ENTITY_POSITION(police_ped, true)
-    PED.SET_PED_CAN_RAGDOLL(police_ped, false)
-    PED.SET_BLOCKING_OF_NON_TEMPORARY_EVENTS(police_ped, true)
-    TASK.CLEAR_PED_TASKS_IMMEDIATELY(police_ped)
+    if ENTITY.DOES_ENTITY_EXIST(police_ped) then
+        ENTITY.FREEZE_ENTITY_POSITION(police_ped, true)
+        PED.SET_PED_CAN_RAGDOLL(police_ped, false)
+        PED.SET_BLOCKING_OF_NON_TEMPORARY_EVENTS(police_ped, true)
+        TASK.CLEAR_PED_TASKS_IMMEDIATELY(police_ped)
+    end
 
     -- Delete patrol vehicle (police car)
     safe_delete(patrol_vehicle)
@@ -924,19 +928,20 @@ local function stop_police_mode()
 
         PLAYER.CHANGE_PLAYER_PED(players.user(), original_player_ped, false, false)
         util.yield(500)
-
-        -- Delete the police ped immediately after switching
-        if police_ped ~= players.user_ped() and ENTITY.DOES_ENTITY_EXIST(police_ped) then
-            safe_delete(police_ped)
-        end
     else
-        -- Even if restoration fails, delete the police ped to prevent it from acting
         log_error("stop_police_mode", "Character restoration failed - original_player_ped invalid or missing")
         util.toast("[" .. T("Police Simulator") .. "] " .. T("Character restoration failed!") .. "\n" .. T("Reconnect session or use appearance change."))
-        if ENTITY.DOES_ENTITY_EXIST(police_ped) then
-            safe_delete(police_ped)
-        end
     end
+
+    -- Force delete police ped from the world (always, regardless of ped switch success)
+    if ENTITY.DOES_ENTITY_EXIST(police_ped) and police_ped ~= players.user_ped() then
+        ENTITY.SET_ENTITY_AS_MISSION_ENTITY(police_ped, true, true)
+        ENTITY.SET_ENTITY_COORDS_NO_OFFSET(police_ped, 0.0, 0.0, -500.0, false, false, false) -- move far underground
+        ENTITY.SET_ENTITY_VISIBLE(police_ped, false, false)
+        ENTITY.SET_ENTITY_COLLISION(police_ped, false, false)
+        safe_delete(police_ped)
+    end
+    police_ped_handle = nil
 
     PLAYER.SET_PLAYER_CONTROL(players.user(), true, 0)
     local cur_ped = players.user_ped()
@@ -4360,6 +4365,17 @@ util.on_stop(function()
     if police_mode then
         log_event("SYSTEM", "Auto ending duty on script stop")
         stop_police_mode()
+    end
+
+    -- Final safety: force delete police ped if it still exists in the world
+    if police_ped_handle and ENTITY.DOES_ENTITY_EXIST(police_ped_handle) and police_ped_handle ~= players.user_ped() then
+        log_event("SYSTEM", "Force deleting remaining police ped from world")
+        ENTITY.SET_ENTITY_AS_MISSION_ENTITY(police_ped_handle, true, true)
+        ENTITY.SET_ENTITY_COORDS_NO_OFFSET(police_ped_handle, 0.0, 0.0, -500.0, false, false, false)
+        ENTITY.SET_ENTITY_VISIBLE(police_ped_handle, false, false)
+        ENTITY.SET_ENTITY_COLLISION(police_ped_handle, false, false)
+        safe_delete(police_ped_handle)
+        police_ped_handle = nil
     end
 
     -- GPS tracking cleanup
