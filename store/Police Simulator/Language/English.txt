@@ -459,3 +459,12 @@ Police boat deployed = Police boat deployed
 Police boat removed = Police boat removed
 Boat spawn failed! Try near water. = Boat spawn failed! Try near water.
 No police boat available = No police boat available
+
+Notification = Notification
+Type = Type
+In-Game = In-Game
+No Notification = No Notification
+Successfully set! = Successfully set!
+Successfully cancelled! = Successfully cancelled!
+Would you like to restart the script now? = Would you like to restart the script now?
+file not found = file not found
