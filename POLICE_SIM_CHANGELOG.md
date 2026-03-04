@@ -2,6 +2,69 @@
 
 ---
 
+## v1.6.0 (2025-07-02)
+
+### Major Improvements
+- **HC-Style Error Handling & Logging System**: Complete overhaul of the logging and error handling infrastructure.
+  - New `LOG()` function with HC-style immediate file write (`io.open "a+"`, write, close).
+  - `make_error_handler()`: xpcall error handler that writes to log IMMEDIATELY inside the handler (runs before stack unwinds, ensuring Stand can't prevent logging).
+  - `safe_call()`: Wrapper for all menu action callbacks with xpcall error protection.
+  - `safe_tick_handler()`: Wrapper for all tick handlers with per-tick xpcall error catching and automatic stop on error to prevent log spam.
+  - `safe_thread()`: Wrapper for all `util.create_thread` calls with xpcall error catching.
+  - `log_error()`, `log_warning()`: Structured error/warning logging with version stamp.
+  - `ERROR_LOG()`: Fatal error handler that logs, toasts, and stops the script.
+- **Robust `place_on_ground()` helper**: Safe wrapper for `PLACE_ENTITY_ON_GROUND_PROPERLY` with existence check and fallback to manual ground Z detection.
+
+### Stability
+- All tick handlers now wrapped in `safe_tick_handler` for crash-proof operation.
+- All background threads now wrapped in `safe_thread` for error isolation.
+- All menu action callbacks now wrapped in `safe_call` for graceful error recovery.
+- Added `on_pre_stop` handler for pre-shutdown logging.
+- Stack traces captured via `debug.traceback` in error handlers for detailed diagnostics.
+
+---
+
+## v1.5.0
+
+### New Features
+- **Emergency Call System**: Respond to 6 types of urgent emergency calls with time limits and rewards.
+  - Hostage Situation (180s, +10 pts, hostage NPC with cower animation)
+  - Bank Robbery (150s, +12 pts)
+  - Officer Down (120s, +8 pts)
+  - Pursuit Assist (90s, +6 pts)
+  - Stolen Vehicle Recovery (120s, +5 pts)
+  - Armed Standoff (200s, +15 pts)
+  - GPS route guidance to emergency location
+  - Auto-fail on time expiration with audio feedback
+- **DUI Checkpoint**: Set up sobriety checkpoints for DUI enforcement.
+  - Place cones and work lights at current position
+  - Test nearby vehicle drivers (30% DUI detection chance)
+  - DUI arrest with animation and fade-out cleanup
+  - Sober drivers released and resume driving
+  - DUI arrests count toward rank points (2 pts each)
+- **Suspect Search**: Search the nearest pedestrian for contraband.
+  - 5-second cooldown between searches
+  - 25% chance of finding contraband (drugs, stolen goods, illegal weapon, counterfeit money, burglary tools)
+  - Contraband found → arrest with animation
+  - Nothing found → suspect released and flees
+- **Escort Mission**: VIP protection escort missions.
+  - VIP vehicle (Cognoscenti) with driver and VIP passenger
+  - GPS-guided route to random destination
+  - Enemy attackers spawn periodically during escort
+  - +10 rank points on successful delivery
+  - Mission fails if VIP vehicle is destroyed
+- **Police Boat**: Water patrol capability.
+  - Spawn police patrol boat (Predator)
+  - Enter/delete boat commands
+  - Inherits vehicle invincibility setting
+
+### Improvements
+- **Extended language support**: Added 8 new languages.
+  - French, German, Italian, Polish, Portuguese, Russian, Spanish, Vietnamese
+  - Total: 12 supported languages
+
+---
+
 ## v1.4.0 (2026-03-03)
 
 ### Bug Fixes
