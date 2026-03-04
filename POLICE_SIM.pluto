@@ -14,15 +14,17 @@ local LANG_DIR = PS_DIR .. "Language\\"
 local SETTING_DIR = PS_DIR .. "Setting\\"
 local SETTING_FILE = SETTING_DIR .. "Setting.txt"
 local IMG_DIR = PS_DIR .. "Image\\"
-local LOG_FILE = PS_DIR .. "Log.txt"
+local LOG_DIR = PS_DIR .. "logs\\"
+local LOG_FILE = LOG_DIR .. os.date("%Y-%m-%d_%H-%M-%S") .. ".txt"
 
 filesystem.mkdirs(LANG_DIR)
 filesystem.mkdirs(SETTING_DIR)
 filesystem.mkdirs(IMG_DIR)
+filesystem.mkdirs(LOG_DIR)
 
--- ==================== LOGGING SYSTEM (HC-Style) ====================
+-- ==================== LOGGING SYSTEM ====================
 
--- Immediately write to log file (HC approach: io.open "a+", write, close)
+-- Immediately write to log file (open, write, close per call for reliability)
 local function LOG(message)
     local f = io.open(LOG_FILE, "a+")
     if f then
@@ -44,7 +46,7 @@ local function log_warning(source, message)
     log_event("WARNING", source .. " | " .. message)
 end
 
--- HC-style fatal error: log + toast + stop
+-- Fatal error: log + toast + stop script
 local function ERROR_LOG(error_message)
     LOG("Police Simulator Version: v" .. SCRIPT_VERSION)
     LOG("| Police Simulator - ERROR | " .. error_message)
