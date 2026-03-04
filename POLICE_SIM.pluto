@@ -432,6 +432,9 @@ local arrest_range = 3.0
 local chase_target = nil
 local chase_active = false
 
+local gps_tracking_blip = nil
+local gps_tracking_active = false
+
 local total_arrests = 0
 local total_kills = 0
 local total_crimes_detected = 0
@@ -878,6 +881,11 @@ local function stop_police_mode()
     chase_active = false
     chase_target = nil
 
+    -- GPS tracking cleanup
+    remove_blip(gps_tracking_blip)
+    gps_tracking_blip = nil
+    gps_tracking_active = false
+
     local police_ped = players.user_ped()
     local current_pos = players.get_position(players.user())
     local heading = ENTITY.GET_ENTITY_HEADING(police_ped)
@@ -1139,6 +1147,72 @@ local function get_closest_criminal()
 
     return closest, closest_dist
 end
+
+-- ==================== GPS CRIMINAL TRACKING ====================
+
+local function update_gps_tracking()
+    if not police_mode then return end
+
+    local closest, closest_dist = get_closest_criminal()
+    if not closest then
+        remove_blip(gps_tracking_blip)
+        gps_tracking_blip = nil
+        return
+    end
+
+    local crim_pos = ENTITY.GET_ENTITY_COORDS(closest.ped, true)
+
+    -- Remove old blip if it exists
+    remove_blip(gps_tracking_blip)
+    gps_tracking_blip = nil
+
+    -- Create new GPS route blip on nearest criminal
+    gps_tracking_blip = HUD.ADD_BLIP_FOR_COORD(crim_pos.x, crim_pos.y, crim_pos.z)
+    HUD.SET_BLIP_SPRITE(gps_tracking_blip, 1)
+    HUD.SET_BLIP_COLOUR(gps_tracking_blip, 1)
+    HUD.SET_BLIP_SCALE(gps_tracking_blip, 0.9)
+    HUD.SET_BLIP_AS_SHORT_RANGE(gps_tracking_blip, false)
+    HUD.SET_BLIP_ROUTE(gps_tracking_blip, true)
+    HUD.SET_BLIP_ROUTE_COLOUR(gps_tracking_blip, 1)
+end
+
+local function start_gps_tracking()
+    if not police_mode then
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
+        return
+    end
+    gps_tracking_active = true
+    update_gps_tracking()
+    log_event("TRACKING", "GPS criminal tracking activated")
+    radio_message(T("GPS tracking activated. Following nearest suspect."))
+end
+
+local function stop_gps_tracking()
+    gps_tracking_active = false
+    remove_blip(gps_tracking_blip)
+    gps_tracking_blip = nil
+    log_event("TRACKING", "GPS criminal tracking deactivated")
+    radio_message(T("GPS tracking deactivated."))
+end
+
+-- GPS tracking tick handler: updates route to nearest criminal every 2 seconds
+local gps_update_timer = 0
+safe_tick_handler("gps_tracking", function()
+    if not police_mode or not gps_tracking_active then return end
+
+    local now = os.time()
+    if now - gps_update_timer < 2 then return end
+    gps_update_timer = now
+
+    local closest = get_closest_criminal()
+    if not closest then
+        remove_blip(gps_tracking_blip)
+        gps_tracking_blip = nil
+        return
+    end
+
+    update_gps_tracking()
+end)
 
 local function generate_crime_event()
     if not police_mode or #criminals >= max_criminals then return end
@@ -3679,10 +3753,34 @@ ref = menu.action(CRIME_MENU, T("Remove All Criminals"), {"psclearcrim"}, T("Rem
     criminals = {}
     chase_active = false
     chase_target = nil
+    stop_gps_tracking()
     log_event("CRIME", "All criminals removed")
     util.toast("[" .. T("Police Simulator") .. "] " .. T("All criminals removed"))
 end)
 reg(ref, CRIME_MENU, function() return T("Remove All Criminals") end, function() return T("Remove all criminals.") end)
+
+ref = menu.divider(CRIME_MENU, T("GPS Tracking"))
+reg(ref, CRIME_MENU, function() return T("GPS Tracking") end)
+
+ref = menu.action(CRIME_MENU, T("Track Nearest Criminal"), {"pstrack"}, T("Set GPS route to nearest criminal. Auto-updates."), function()
+    if not police_mode then
+        log_warning("GPS Track", "Attempted without being on duty")
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("Start duty first!"))
+        return
+    end
+    local closest = get_closest_criminal()
+    if not closest then
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("No criminals nearby."))
+        return
+    end
+    safe_call("Start GPS Tracking", start_gps_tracking)
+end)
+reg(ref, CRIME_MENU, function() return T("Track Nearest Criminal") end, function() return T("Set GPS route to nearest criminal. Auto-updates.") end)
+
+ref = menu.action(CRIME_MENU, T("Stop Tracking"), {"pstrackstop"}, T("Stop GPS criminal tracking."), function()
+    safe_call("Stop GPS Tracking", stop_gps_tracking)
+end)
+reg(ref, CRIME_MENU, function() return T("Stop Tracking") end, function() return T("Stop GPS criminal tracking.") end)
 
 local WAVE_MENU = menu.list(ROOT, T("Wave Mode"), {"pswave"}, T("Respond to continuous crime waves."))
 reg(WAVE_MENU, ROOT, function() return T("Wave Mode") end, function() return T("Respond to continuous crime waves.") end)
