@@ -1,6 +1,6 @@
 -- POLICE_SIM.pluto
 
-local SCRIPT_VERSION = "2.0.0"
+local SCRIPT_VERSION = "2.0.1"
 
 if not util then
     error("This script must be run inside the Stand environment.")
@@ -4339,12 +4339,17 @@ reg(ref, SETTINGS_MENU, function() return T("Difficulty Preset") end, function()
 local DIFF_MENU = ref
 
 for i, preset in ipairs(DIFFICULTY_PRESETS) do
-    ref = menu.action(DIFF_MENU, T(preset.name), {}, T("Accuracy") .. ": " .. preset.accuracy .. "% | " .. T("Health") .. ": x" .. preset.health, function()
+    local desc = T("Accuracy") .. ": " .. preset.accuracy .. "% | " .. T("Health") .. ": x" .. preset.health
+    ref = menu.action(DIFF_MENU, T(preset.name), {}, desc, function()
         apply_difficulty(i)
         log_event("SETTING", "Difficulty changed to: " .. preset.name)
         NOTIFY(T("Difficulty") .. ": " .. T(preset.name))
     end)
-    reg(ref, DIFF_MENU, function() return T(DIFFICULTY_PRESETS[i].name) end, function() return T("Accuracy") .. ": " .. DIFFICULTY_PRESETS[i].accuracy .. "% | " .. T("Health") .. ": x" .. DIFFICULTY_PRESETS[i].health end)
+    reg(ref, DIFF_MENU, function() return T(DIFFICULTY_PRESETS[i].name) end, function()
+        local d = T("Accuracy") .. ": " .. DIFFICULTY_PRESETS[i].accuracy
+        d = d .. "% | " .. T("Health") .. ": x" .. DIFFICULTY_PRESETS[i].health
+        return d
+    end)
 end
 
 ref = menu.slider(SETTINGS_MENU, T("Crime Detection Range (m)"), {"pscrimerange"}, T("Crime event spawn range."), 50, 500, 150, 10, function(val)
