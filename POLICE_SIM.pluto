@@ -1,6 +1,6 @@
 -- POLICE_SIM.pluto
 
-local SCRIPT_VERSION = "1.9.4"
+local SCRIPT_VERSION = "2.0.0"
 
 if not util then
     error("This script must be run inside the Stand environment.")
@@ -141,6 +141,10 @@ end)
 -- ==================== NOTIFICATION SYSTEM ====================
 
 local notification_type = "Stand" -- will be loaded after read_setting is defined
+local notification_icon = "CHAR_CALL911" -- will be loaded after read_setting is defined
+local notification_icon_name = "911"
+local notification_color = 140 -- will be loaded after read_setting is defined
+local notification_color_name = "Black"
 
 local function NOTIFY(message)
     LOG("| NOTIFY | " .. message)
@@ -151,6 +155,8 @@ local function NOTIFY(message)
         if ok and result then
             HUD.BEGIN_TEXT_COMMAND_THEFEED_POST("STRING")
             HUD.ADD_TEXT_COMPONENT_SUBSTRING_PLAYER_NAME(message)
+            HUD.THEFEED_SET_BACKGROUND_COLOR_FOR_NEXT_POST(notification_color)
+            HUD.END_TEXT_COMMAND_THEFEED_POST_MESSAGETEXT(notification_icon, notification_icon, true, 1, T("Police Simulator"), "~c~" .. T("Notification"))
             HUD.END_TEXT_COMMAND_THEFEED_POST_TICKER(true, false)
         else
             util.toast("[" .. T("Police Simulator") .. "] " .. T("Notification") .. "\n\n" .. message)
@@ -314,6 +320,12 @@ if notification_type ~= "Stand" and notification_type ~= "In-Game" and notificat
     notification_type = "Stand"
     write_setting("Notification Type", "Stand")
 end
+
+-- Load notification style settings
+notification_icon = read_setting("Notification Icon") or "CHAR_CALL911"
+notification_icon_name = read_setting("Notification Icon Name") or "911"
+notification_color = tonumber(read_setting("Notification Color")) or 140
+notification_color_name = read_setting("Notification Color Name") or "Black"
 
 local Translations = {}
 
@@ -4258,6 +4270,67 @@ ref = menu.action(NOTIFICATION_MENU, T("No Notification"), {}, "", function()
     NOTIFY(T("Successfully set!"))
 end)
 
+-- Notification Style (Icon and Background Color for In-Game)
+ref = menu.divider(NOTIFICATION_MENU, T("In-Game Style"))
+reg(ref, NOTIFICATION_MENU, function() return T("In-Game Style") end)
+
+-- Icon selection
+local ICON_TYPES = {
+    { name = "911",              code = "CHAR_CALL911" },
+    { name = "Lester",           code = "CHAR_LESTER" },
+    { name = T("Legend"),        code = "CHAR_ALL_PLAYERS_CONF" },
+    { name = T("Skull"),         code = "CHAR_LESTER_DEATHWISH" },
+    { name = "Warstock",         code = "CHAR_MILSITE" },
+    { name = "R*",               code = "CHAR_MP_FM_CONTACT" },
+    { name = "Social Club",      code = "CHAR_SOCIAL_CLUB" },
+}
+
+local ICON_MENU = menu.list(NOTIFICATION_MENU, T("Icon") .. ": " .. notification_icon_name, {"psnotifyicon"}, T("Select notification icon for In-Game mode."))
+reg(ICON_MENU, NOTIFICATION_MENU, function() return T("Icon") .. ": " .. notification_icon_name end, function() return T("Select notification icon for In-Game mode.") end)
+
+for _, icon in ipairs(ICON_TYPES) do
+    menu.action(ICON_MENU, icon.name, {}, "", function()
+        notification_icon = icon.code
+        notification_icon_name = icon.name
+        write_setting("Notification Icon", icon.code)
+        write_setting("Notification Icon Name", icon.name)
+        notification_type = "In-Game"
+        write_setting("Notification Type", "In-Game")
+        menu.set_menu_name(ICON_MENU, T("Icon") .. ": " .. icon.name)
+        menu.set_menu_name(NOTIFICATION_MENU, T("Notification") .. ": " .. T("In-Game"))
+        NOTIFY(T("Successfully set!"))
+    end)
+end
+
+-- Background Color selection
+local COLOR_TYPES = {
+    { name = T("White"),      code = 160 },
+    { name = T("Black"),      code = 140 },
+    { name = T("Red"),        code = 6 },
+    { name = T("Orange"),     code = 130 },
+    { name = T("Yellow"),     code = 180 },
+    { name = T("Mint"),       code = 200 },
+    { name = T("Green"),      code = 184 },
+    { name = T("Light Blue"), code = 40 },
+}
+
+local COLOR_MENU = menu.list(NOTIFICATION_MENU, T("Background Color") .. ": " .. notification_color_name, {"psnotifycolor"}, T("Select notification background color for In-Game mode."))
+reg(COLOR_MENU, NOTIFICATION_MENU, function() return T("Background Color") .. ": " .. notification_color_name end, function() return T("Select notification background color for In-Game mode.") end)
+
+for _, color in ipairs(COLOR_TYPES) do
+    menu.action(COLOR_MENU, color.name, {}, "", function()
+        notification_color = color.code
+        notification_color_name = color.name
+        write_setting("Notification Color", tostring(color.code))
+        write_setting("Notification Color Name", color.name)
+        notification_type = "In-Game"
+        write_setting("Notification Type", "In-Game")
+        menu.set_menu_name(COLOR_MENU, T("Background Color") .. ": " .. color.name)
+        menu.set_menu_name(NOTIFICATION_MENU, T("Notification") .. ": " .. T("In-Game"))
+        NOTIFY(T("Successfully set!"))
+    end)
+end
+
 ref = menu.divider(SETTINGS_MENU, T("Crime Settings"))
 reg(ref, SETTINGS_MENU, function() return T("Crime Settings") end)
 
@@ -4396,12 +4469,16 @@ reg(ref, SETTINGS_MENU, function() return T("Debug Info") end, function() return
 ref = menu.action(ROOT, T("About"), {"psabout"}, T("Police Simulator info."), function()
     NOTIFY(
         "[ " .. T("Police Simulator") .. " ]\n" ..
-        T("Version") .. ": " .. SCRIPT_VERSION .. "\n" ..
+        T("Version") .. ": v" .. SCRIPT_VERSION .. "\n" ..
         T("Language") .. ": " .. current_lang .. "\n" ..
-        T("Notification") .. ": " .. T(notification_type)
+        T("Notification") .. ": " .. T(notification_type) .. "\n" ..
+        T("Icon") .. ": " .. notification_icon_name .. "\n" ..
+        T("Background Color") .. ": " .. notification_color_name
     )
 end)
 reg(ref, ROOT, function() return T("About") end, function() return T("Police Simulator info.") end)
+
+menu.hyperlink(ROOT, "GitHub", "https://github.com/Valley658/POLICE_SIM", T("View source code and releases on GitHub."))
 
 ref = menu.action(ROOT, T("Duty Stats"), {"psstats"}, T("Show current duty statistics."), function()
     local elapsed = police_mode and (os.time() - shift_start_time) or 0
