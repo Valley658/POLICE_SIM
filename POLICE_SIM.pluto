@@ -1,6 +1,6 @@
 -- POLICE_SIM.pluto
 
-local SCRIPT_VERSION = "2.1.0"
+local SCRIPT_VERSION = "2.1.1"
 
 if not util then
     error("This script must be run inside the Stand environment.")
@@ -466,6 +466,7 @@ end
 
 local police_mode = false
 local original_player_ped = nil
+local original_model_hash = nil -- store original player model for fallback restoration
 local police_ped_handle = nil -- track police ped globally for reliable cleanup
 local original_ped_stash_pos = {x = 0.0, y = 0.0, z = -200.0}
 local patrol_vehicle = nil
@@ -761,6 +762,7 @@ local function start_police_mode()
     util.request_model(model_hash)
 
     original_player_ped = players.user_ped()
+    original_model_hash = ENTITY.GET_ENTITY_MODEL(original_player_ped)
     local current_pos = players.get_position(players.user())
 
     local police_ped = PED.CREATE_PED(4, model_hash, current_pos.x, current_pos.y, current_pos.z, ENTITY.GET_ENTITY_HEADING(original_player_ped), true, false)
@@ -962,6 +964,7 @@ local function stop_police_mode()
     safe_delete(patrol_vehicle)
     patrol_vehicle = nil
 
+    local restored = false
     if original_player_ped and ENTITY.DOES_ENTITY_EXIST(original_player_ped) then
         ENTITY.SET_ENTITY_COORDS_NO_OFFSET(original_player_ped, current_pos.x, current_pos.y, current_pos.z, false, false, false)
         ENTITY.SET_ENTITY_HEADING(original_player_ped, heading)
@@ -975,9 +978,27 @@ local function stop_police_mode()
 
         PLAYER.CHANGE_PLAYER_PED(players.user(), original_player_ped, false, false)
         util.yield(500)
-    else
-        log_error("stop_police_mode", "Character restoration failed - original_player_ped invalid or missing")
-        NOTIFY(T("Character restoration failed!") .. "\n" .. T("Reconnect session or use appearance change."))
+
+        -- Verify the switch actually worked
+        if players.user_ped() == original_player_ped then
+            restored = true
+            log_event("DUTY", "Character restored via CHANGE_PLAYER_PED")
+        end
+    end
+
+    -- Fallback: use SET_PLAYER_MODEL if CHANGE_PLAYER_PED failed or original ped was gone
+    if not restored then
+        log_event("DUTY", "Fallback: restoring character via SET_PLAYER_MODEL")
+        local restore_hash = original_model_hash or util.joaat("mp_m_freemode_01")
+        util.request_model(restore_hash)
+        PLAYER.SET_PLAYER_MODEL(players.user(), restore_hash)
+        util.yield(500)
+        STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(restore_hash)
+        local new_ped = players.user_ped()
+        ENTITY.SET_ENTITY_COORDS_NO_OFFSET(new_ped, current_pos.x, current_pos.y, current_pos.z, false, false, false)
+        ENTITY.SET_ENTITY_HEADING(new_ped, heading)
+        PED.SET_PED_DEFAULT_COMPONENT_VARIATION(new_ped)
+        log_event("DUTY", "Character restored via SET_PLAYER_MODEL")
     end
 
     -- Force delete police ped from the world (always, regardless of ped switch success)
@@ -999,6 +1020,7 @@ local function stop_police_mode()
     ENTITY.SET_ENTITY_ALPHA(cur_ped, 255, false)
 
     original_player_ped = nil
+    original_model_hash = nil
     menu.set_value(godmode_ref, original_godmode)
 
     local elapsed = os.time() - shift_start_time
