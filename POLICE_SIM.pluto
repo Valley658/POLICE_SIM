@@ -1,6 +1,6 @@
 -- POLICE_SIM.pluto
 
-local SCRIPT_VERSION = "1.9.0"
+local SCRIPT_VERSION = "1.9.1"
 
 if not util then
     error("This script must be run inside the Stand environment.")
@@ -149,7 +149,7 @@ end
 local function NOTIFY(message)
     LOG("| NOTIFY | " .. message)
     if notification_type == "Stand" then
-        NOTIFY(T("Notification") .. "\n\n" .. message)
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("Notification") .. "\n\n" .. message)
     elseif notification_type == "In-Game" then
         local ok, result = pcall(function() return util.is_session_started and util.is_session_started() end)
         if ok and result then
@@ -157,14 +157,14 @@ local function NOTIFY(message)
             HUD.ADD_TEXT_COMPONENT_SUBSTRING_PLAYER_NAME(message)
             HUD.END_TEXT_COMMAND_THEFEED_POST_TICKER(true, false)
         else
-            NOTIFY(T("Notification") .. "\n\n" .. message)
+            util.toast("[" .. T("Police Simulator") .. "] " .. T("Notification") .. "\n\n" .. message)
         end
     elseif notification_type == "No Notification" then
         -- Nothing
     else
         notification_type = "Stand"
         write_setting("Notification Type", "Stand")
-        NOTIFY(T("Notification") .. "\n\n" .. message)
+        util.toast("[" .. T("Police Simulator") .. "] " .. T("Notification") .. "\n\n" .. message)
     end
 end
 
