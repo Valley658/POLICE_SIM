@@ -73,13 +73,13 @@ Select language. = Select language.
 
 # === New Settings ===
 Criminal Settings = Criminal Settings
-Criminal Accuracy (%) = Criminal Accuracy (%)
-How accurate criminals shoot. Higher = harder. = How accurate criminals shoot. Higher = harder.
+Criminal Accuracy = Criminal Accuracy
+How accurate criminals shoot. Higher is harder. = How accurate criminals shoot. Higher = harder.
 Criminal Health Multiplier = Criminal Health Multiplier
-Criminal health multiplier. 1x = normal, 5x = very tough. = Criminal health multiplier. 1x = normal, 5x = very tough.
-Criminal Flee Chance (%) = Criminal Flee Chance (%)
+Criminal health multiplier. 1x is normal, 5x is very tough. = Criminal health multiplier. 1x = normal, 5x = very tough.
+Criminal Flee Chance = Criminal Flee Chance
 Chance that criminals will flee instead of fight. = Chance that criminals will flee instead of fight.
-Criminal Vehicle Chance (%) = Criminal Vehicle Chance (%)
+Criminal Vehicle Chance = Criminal Vehicle Chance
 Chance that criminals will have a vehicle. = Chance that criminals will have a vehicle.
 Player Settings = Player Settings
 Player Invincible = Player Invincible
