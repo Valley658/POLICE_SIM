@@ -73,13 +73,13 @@ Select language. = Wybierz język.
 
 # === Ustawienia ===
 Criminal Settings = Ustawienia Przestępców
-Criminal Accuracy (%) = Celność Przestępców (%)
-How accurate criminals shoot. Higher = harder. = Jak celnie strzelają przestępcy. Wyżej = trudniej.
+Criminal Accuracy = Celność Przestępców
+How accurate criminals shoot. Higher is harder. = Jak celnie strzelają przestępcy. Wyżej = trudniej.
 Criminal Health Multiplier = Mnożnik Zdrowia Przestępców
-Criminal health multiplier. 1x = normal, 5x = very tough. = Mnożnik zdrowia przestępców. 1x = normalnie, 5x = bardzo wytrzymali.
-Criminal Flee Chance (%) = Szansa Ucieczki (%)
+Criminal health multiplier. 1x is normal, 5x is very tough. = Mnożnik zdrowia przestępców. 1x = normalnie, 5x = bardzo wytrzymali.
+Criminal Flee Chance = Szansa Ucieczki
 Chance that criminals will flee instead of fight. = Szansa, że przestępcy uciekną zamiast walczyć.
-Criminal Vehicle Chance (%) = Szansa na Pojazd (%)
+Criminal Vehicle Chance = Szansa na Pojazd
 Chance that criminals will have a vehicle. = Szansa, że przestępcy będą mieć pojazd.
 Player Settings = Ustawienia Gracza
 Player Invincible = Gracz Nieśmiertelny
@@ -425,7 +425,7 @@ Search the nearest person for contraband. = Przeszukaj najbliższą osobę pod k
 Searching suspect... = Przeszukiwanie podejrzanego...
 Wait before searching again = Poczekaj przed ponownym przeszukaniem
 No one nearby to search = Nikogo w pobliżu do przeszukania
-Contraband found = Znaleziono kontrabande
+Contraband found = Znaleziono kontrabandę
 Nothing found. Suspect released. = Nic nie znaleziono. Podejrzany zwolniony.
 drugs = narkotyki
 stolen goods = skradzione towary
