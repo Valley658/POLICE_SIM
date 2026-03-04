@@ -73,13 +73,13 @@ Select language. = Chọn ngôn ngữ.
 
 # === Cài Đặt ===
 Criminal Settings = Cài Đặt Tội Phạm
-Criminal Accuracy (%) = Độ Chính Xác Tội Phạm (%)
-How accurate criminals shoot. Higher = harder. = Độ chính xác bắn của tội phạm. Cao hơn = khó hơn.
+Criminal Accuracy = Độ Chính Xác Tội Phạm
+How accurate criminals shoot. Higher is harder. = Độ chính xác bắn của tội phạm. Cao hơn = khó hơn.
 Criminal Health Multiplier = Hệ Số Máu Tội Phạm
-Criminal health multiplier. 1x = normal, 5x = very tough. = Hệ số máu tội phạm. 1x = bình thường, 5x = rất khỏe.
-Criminal Flee Chance (%) = Xác Suất Bỏ Chạy (%)
+Criminal health multiplier. 1x is normal, 5x is very tough. = Hệ số máu tội phạm. 1x = bình thường, 5x = rất khỏe.
+Criminal Flee Chance = Xác Suất Bỏ Chạy
 Chance that criminals will flee instead of fight. = Xác suất tội phạm bỏ chạy thay vì chiến đấu.
-Criminal Vehicle Chance (%) = Xác Suất Có Xe (%)
+Criminal Vehicle Chance = Xác Suất Có Xe
 Chance that criminals will have a vehicle. = Xác suất tội phạm có xe.
 Player Settings = Cài Đặt Người Chơi
 Player Invincible = Người Chơi Bất Tử
