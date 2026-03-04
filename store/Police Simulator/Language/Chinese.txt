@@ -73,13 +73,13 @@ Select language. = 选择语言。
 
 # === 新设置 ===
 Criminal Settings = 罪犯设置
-Criminal Accuracy (%) = 罪犯命中率（%）
-How accurate criminals shoot. Higher = harder. = 罪犯射击精度。越高越难。
+Criminal Accuracy = 罪犯命中率
+How accurate criminals shoot. Higher is harder. = 罪犯射击精度。越高越难。
 Criminal Health Multiplier = 罪犯生命倍率
-Criminal health multiplier. 1x = normal, 5x = very tough. = 罪犯生命倍率。1x=普通，5x=非常强。
-Criminal Flee Chance (%) = 罪犯逃跑概率（%）
+Criminal health multiplier. 1x is normal, 5x is very tough. = 罪犯生命倍率。1x=普通，5x=非常强。
+Criminal Flee Chance = 罪犯逃跑概率
 Chance that criminals will flee instead of fight. = 罪犯逃跑而不是战斗的概率。
-Criminal Vehicle Chance (%) = 罪犯车辆概率（%）
+Criminal Vehicle Chance = 罪犯车辆概率
 Chance that criminals will have a vehicle. = 罪犯拥有车辆的概率。
 Player Settings = 玩家设置
 Player Invincible = 玩家无敌
