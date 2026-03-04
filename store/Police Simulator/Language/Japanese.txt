@@ -73,13 +73,13 @@ Select language. = 言語を選択します。
 
 # === 新設定 ===
 Criminal Settings = 犯罪者設定
-Criminal Accuracy (%) = 犯罪者命中率（%）
-How accurate criminals shoot. Higher = harder. = 犯罪者の射撃精度。高いほど難しい。
+Criminal Accuracy = 犯罪者命中率
+How accurate criminals shoot. Higher is harder. = 犯罪者の射撃精度。高いほど難しい。
 Criminal Health Multiplier = 犯罪者体力倍率
-Criminal health multiplier. 1x = normal, 5x = very tough. = 犯罪者の体力倍率。1x=通常、5x=非常にタフ。
-Criminal Flee Chance (%) = 犯罪者逃走確率（%）
+Criminal health multiplier. 1x is normal, 5x is very tough. = 犯罪者の体力倍率。1x=通常、5x=非常にタフ。
+Criminal Flee Chance = 犯罪者逃走確率
 Chance that criminals will flee instead of fight. = 犯罪者が戦わず逃走する確率。
-Criminal Vehicle Chance (%) = 犯罪者車両確率（%）
+Criminal Vehicle Chance = 犯罪者車両確率
 Chance that criminals will have a vehicle. = 犯罪者が車両を持つ確率。
 Player Settings = プレイヤー設定
 Player Invincible = プレイヤー無敵
@@ -151,7 +151,7 @@ Vehicle load failed! = 車両読み込み失敗！
 Vehicle spawn failed! = 車両召喚失敗！
 Patrol vehicle spawned = パトカー召喚完了
 Get closer to the criminal! = 犯罪者にもっと近づいてください！
-HQ, 1 suspect arrested. Total arrests = 本部、容疑者１名逮捕完了。累計逮捕
+HQ, 1 suspect arrested. Total arrests = 本部、容疑者1名逮捕完了。累計逮捕
 Distance to location = 現場までの距離
 HQ, suspect fleeing in vehicle! Pursuit started! = 本部、容疑者が車両で逃走中！追跡開始！
 HQ, suspect fleeing on foot! Pursuit started! = 本部、容疑者が徒歩で逃走中！追跡開始！
@@ -401,7 +401,7 @@ Bank Robbery = 銀行強盗
 Officer Down = 警官負傷
 Pursuit Assist = 追跡支援
 Stolen Vehicle Recovery = 盗難車両回収
-Armed Standoff = 武装対峳
+Armed Standoff = 武装対峙
 DUI Checkpoint = 飲酒検問所
 Set up sobriety checkpoints. = 飲酒検問所を設置します。
 Setup Checkpoint = 検問所設置
@@ -422,7 +422,7 @@ Driver is sober. Released. = 運転手は正常。通過。
 arrests = 件
 Search Suspect = 身体検査
 Search the nearest person for contraband. = 最寄りの人物を身体検査します。
-Searching suspect... = 容疑者を捐索中...
+Searching suspect... = 容疑者を捜索中...
 Wait before searching again = しばらく待ってから再検査
 No one nearby to search = 近くに検査対象なし
 Contraband found = 禁制品発見
